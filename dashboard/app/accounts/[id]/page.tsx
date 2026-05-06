@@ -63,12 +63,12 @@ export default async function AccountDetailPage({
 
   const [account, opps, contacts, cases, financialAccountsResult, relationshipsResult] =
     await Promise.allSettled([
-      getAccount(session.instanceUrl, session.accessToken, id),
-      getAccountOpportunities(session.instanceUrl, session.accessToken, id),
-      getAccountContacts(session.instanceUrl, session.accessToken, id),
-      getAccountCases(session.instanceUrl, session.accessToken, id),
-      getFinancialAccounts(session.instanceUrl, session.accessToken, id),
-      getAccountRelationships(session.instanceUrl, session.accessToken, id),
+      getAccount(session.instanceUrl!, session.accessToken!, id),
+      getAccountOpportunities(session.instanceUrl!, session.accessToken!, id),
+      getAccountContacts(session.instanceUrl!, session.accessToken!, id),
+      getAccountCases(session.instanceUrl!, session.accessToken!, id),
+      getFinancialAccounts(session.instanceUrl!, session.accessToken!, id),
+      getAccountRelationships(session.instanceUrl!, session.accessToken!, id),
     ]);
 
   // Redirect on session expiry (FSC functions catch all errors, so only check core queries)
@@ -92,7 +92,7 @@ export default async function AccountDetailPage({
   // Phase 2: fan out roles for each financial account
   const rolesResults = await Promise.allSettled(
     financialAccountList.map((fa) =>
-      getFinancialAccountRoles(session.instanceUrl, session.accessToken, fa.Id)
+      getFinancialAccountRoles(session.instanceUrl!, session.accessToken!, fa.Id)
     )
   );
   const rolesMap = new Map<string, SFFinancialAccountRole[]>();
