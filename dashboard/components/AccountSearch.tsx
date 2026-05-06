@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import type { SFAccount } from "@/lib/salesforce";
 
 function formatCurrency(value: number | null): string {
@@ -30,14 +30,21 @@ function ExternalLinkIcon() {
 }
 
 export default function AccountSearch({
-  accounts,
+  accounts: initialAccounts,
+  totalCount,
   instanceUrl,
 }: {
   accounts: SFAccount[];
+  totalCount: number;
   instanceUrl?: string;
 }) {
+  const [accounts, setAccounts] = useState<SFAccount[]>(initialAccounts);
   const [query, setQuery] = useState("");
   const [industry, setIndustry] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const allLoaded = accounts.length >= totalCount;
 
   const industries = useMemo(() => getIndustries(accounts), [accounts]);
 
@@ -54,6 +61,25 @@ export default function AccountSearch({
       return matchesQuery && matchesIndustry;
     });
   }, [accounts, query, industry]);
+
+  const loadMore = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/accounts?offset=${accounts.length}`);
+      if (res.status === 401) {
+        window.location.href = "/api/auth/login";
+        return;
+      }
+      if (!res.ok) throw new Error("Failed to load accounts");
+      const json = await res.json() as { accounts: SFAccount[] };
+      setAccounts((prev) => [...prev, ...json.accounts]);
+    } catch {
+      setError("Failed to load more accounts. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, [accounts.length]);
 
   const sfUrl = (id: string) =>
     instanceUrl ? `${instanceUrl}/lightning/r/Account/${id}/view` : null;
@@ -95,7 +121,9 @@ export default function AccountSearch({
           </select>
         )}
         <p className="text-sm text-gray-400 self-center shrink-0">
-          {filtered.length} of {accounts.length}
+          {query || industry
+            ? `${filtered.length} of ${accounts.length} loaded`
+            : `Showing ${accounts.length} of ${totalCount}`}
         </p>
       </div>
 
@@ -166,6 +194,20 @@ export default function AccountSearch({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Load More */}
+      {!allLoaded && (
+        <div className="mt-8 flex flex-col items-center gap-2">
+          {error && <p className="text-xs text-red-500">{error}</p>}
+          <button
+            onClick={loadMore}
+            disabled={loading}
+            className="px-5 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:border-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {loading ? "Loading…" : `Load more (${totalCount - accounts.length} remaining)`}
+          </button>
         </div>
       )}
     </div>

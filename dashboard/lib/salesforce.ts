@@ -105,14 +105,27 @@ export interface SFPipelineStage {
 export async function listAccounts(
   instanceUrl: string,
   accessToken: string,
-  limit = 25
+  limit = 50,
+  offset = 0
 ): Promise<SFAccount[]> {
   return sfQuery<SFAccount>(
     instanceUrl,
     accessToken,
     `SELECT Id, Name, Industry, AnnualRevenue, NumberOfEmployees, BillingCity, BillingState, Type
-     FROM Account ORDER BY Name ASC LIMIT ${limit}`
+     FROM Account ORDER BY Name ASC LIMIT ${limit} OFFSET ${offset}`
   );
+}
+
+export async function getAccountCount(
+  instanceUrl: string,
+  accessToken: string
+): Promise<number> {
+  const result = await sfFetch<{ totalSize: number }>(
+    instanceUrl,
+    accessToken,
+    `/query?q=${encodeURIComponent("SELECT COUNT() FROM Account")}`
+  );
+  return result.totalSize;
 }
 
 export async function getAccount(
