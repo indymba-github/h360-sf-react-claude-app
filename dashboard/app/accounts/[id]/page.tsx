@@ -25,6 +25,32 @@ function formatDate(value: string | null | undefined): string {
   return new Date(value).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }
 
+function maskAccountNumber(acctNum: string | null): string {
+  if (!acctNum) return "—";
+  return `•••• ${acctNum.slice(-4)}`;
+}
+
+function caseStatusClass(status: string): string {
+  switch (status) {
+    case "New": return "bg-blue-50 text-blue-700";
+    case "Working": return "bg-yellow-50 text-yellow-700";
+    case "Escalated": return "bg-red-50 text-red-700";
+    case "Closed": return "bg-green-50 text-green-700";
+    default: return "bg-gray-100 text-gray-600";
+  }
+}
+
+function faStatusClass(status: string | null): string {
+  if (status === "Open") return "bg-green-50 text-green-700";
+  return "bg-gray-100 text-gray-600";
+}
+
+function isLoanType(recordTypeName: string | null): boolean {
+  if (!recordTypeName) return false;
+  const name = recordTypeName.toLowerCase();
+  return name.includes("loan") || name.includes("mortgage");
+}
+
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
@@ -250,7 +276,7 @@ export default async function AccountDetailPage({
         </div>
 
         {/* Cases */}
-        <div className="bg-white rounded-xl border border-gray-200">
+        <div className="bg-white rounded-xl border border-gray-200 mb-6">
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
             <h2 className="text-sm font-semibold text-gray-900">
               Cases{" "}
@@ -278,7 +304,11 @@ export default async function AccountDetailPage({
                     <p className="text-sm font-medium text-gray-900">
                       #{c.CaseNumber} {c.Subject ?? "(no subject)"}
                     </p>
-                    <p className="text-xs text-gray-400">{formatDate(c.CreatedDate)}</p>
+                    <p className="text-xs text-gray-400">
+                      {formatDate(c.CreatedDate)}
+                      {c.Contact?.Name && ` · ${c.Contact.Name}`}
+                      {c.Owner?.Name && ` · ${c.Owner.Name}`}
+                    </p>
                   </div>
                   <div className="flex items-center gap-2">
                     {c.Priority && (
@@ -290,7 +320,9 @@ export default async function AccountDetailPage({
                         {c.Priority}
                       </span>
                     )}
-                    <span className="text-xs text-gray-500">{c.Status}</span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${caseStatusClass(c.Status)}`}>
+                      {c.Status}
+                    </span>
                   </div>
                 </div>
               ))}
