@@ -345,3 +345,37 @@ export async function getFinancialAccounts(
     return [];
   }
 }
+
+export interface SFFinancialAccountRole {
+  Id: string;
+  Name: string;
+  FinServ__Role__c: string | null;
+  FinServ__Active__c: boolean;
+  FinServ__RelatedAccount__c: string | null;
+  FinServ__RelatedAccount__r: { Name: string } | null;
+  FinServ__RelatedContact__c: string | null;
+  FinServ__RelatedContact__r: { Name: string } | null;
+}
+
+export async function getFinancialAccountRoles(
+  instanceUrl: string,
+  accessToken: string,
+  financialAccountId: string
+): Promise<SFFinancialAccountRole[]> {
+  const safe = financialAccountId.replace(/'/g, "\\'");
+  try {
+    return await sfQuery<SFFinancialAccountRole>(
+      instanceUrl,
+      accessToken,
+      `SELECT Id, Name, FinServ__Role__c,
+              FinServ__RelatedAccount__c, FinServ__RelatedAccount__r.Name,
+              FinServ__RelatedContact__c, FinServ__RelatedContact__r.Name,
+              FinServ__Active__c
+       FROM FinServ__FinancialAccountRole__c
+       WHERE FinServ__FinancialAccount__c = '${safe}'
+       AND FinServ__Active__c = true`
+    );
+  } catch {
+    return [];
+  }
+}
