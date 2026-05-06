@@ -145,9 +145,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
+  interface AgentAccountContext {
+    accountId: string;
+    accountName: string;
+  }
+
   const body = await request.json().catch(() => null) as {
     action: "message" | "end";
     text?: string;
+    accountContext?: AgentAccountContext;
   } | null;
 
   if (!body?.action) {
@@ -196,7 +202,14 @@ export async function POST(request: NextRequest) {
     const sequenceId = (session.agentSequenceId ?? 0) + 1;
 
     try {
-      const reply = await sendMessage(accessToken, session.agentSessionId, sequenceId, body.text!.trim());
+      const userText = body.text!.trim();
+      const ctx = body.accountContext;
+      const messageText = ctx
+        ? `The user is currently viewing the account record for ${ctx.accountName} (Account ID: ${ctx.accountId}). ` +
+          `When they say "her", "his", "this account" or use a first name, they mean ${ctx.accountName}.\n\n` +
+          `User question: ${userText}`
+        : userText;
+      const reply = await sendMessage(accessToken, session.agentSessionId, sequenceId, messageText);
       session.agentSequenceId = sequenceId;
       await session.save();
       return NextResponse.json({ reply });

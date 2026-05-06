@@ -30,19 +30,27 @@ function maskAccountNumber(acctNum: string | null): string {
   return `•••• ${acctNum.slice(-4)}`;
 }
 
-function caseStatusClass(status: string): string {
+type BadgeStyle = { className: string; style?: React.CSSProperties };
+
+function caseStatusBadge(status: string): BadgeStyle {
   switch (status) {
-    case "New": return "bg-blue-50 text-blue-700";
-    case "Working": return "bg-yellow-50 text-yellow-700";
-    case "Escalated": return "bg-red-50 text-red-700";
-    case "Closed": return "bg-green-50 text-green-700";
-    default: return "bg-gray-100 text-gray-600";
+    case "New": return { className: "bg-blue-50 text-blue-700" };
+    case "Working": return { className: "bg-yellow-50 text-yellow-700" };
+    case "Escalated": return { className: "bg-red-50 text-red-700" };
+    case "Closed": return {
+      className: "",
+      style: { background: "color-mix(in srgb, var(--color-secondary) 12%, white)", color: "var(--color-secondary)" },
+    };
+    default: return { className: "bg-gray-100 text-gray-600" };
   }
 }
 
-function faStatusClass(status: string | null): string {
-  if (status === "Open") return "bg-green-50 text-green-700";
-  return "bg-gray-100 text-gray-600";
+function faStatusBadge(status: string | null): BadgeStyle {
+  if (status === "Open") return {
+    className: "",
+    style: { background: "color-mix(in srgb, var(--color-secondary) 12%, white)", color: "var(--color-secondary)" },
+  };
+  return { className: "bg-gray-100 text-gray-600" };
 }
 
 function isLoanType(recordTypeName: string | null): boolean {
@@ -143,7 +151,7 @@ export default async function AccountDetailPage({
       <div className="flex-1 overflow-y-auto p-6 md:p-8">
         {/* Breadcrumb */}
         <nav className="flex items-center gap-1.5 text-xs text-gray-400 mb-6">
-          <a href="/accounts" className="hover:text-gray-600">Accounts</a>
+          <a href="/accounts" className="transition-colors" style={{ color: "var(--color-secondary)" }}>Accounts</a>
           <span>/</span>
           <span className="text-gray-700 font-medium truncate max-w-xs">{acct.Name}</span>
         </nav>
@@ -154,7 +162,10 @@ export default async function AccountDetailPage({
             <h1 className="text-2xl font-bold text-gray-900">{acct.Name}</h1>
             <div className="flex items-center gap-2 mt-1">
               {acct.Type && (
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700">
+                <span
+                  className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
+                  style={{ background: "color-mix(in srgb, var(--color-secondary) 12%, white)", color: "var(--color-secondary)" }}
+                >
                   {acct.Type}
                 </span>
               )}
@@ -329,9 +340,11 @@ export default async function AccountDetailPage({
                         {c.Priority}
                       </span>
                     )}
-                    <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${caseStatusClass(c.Status)}`}>
-                      {c.Status}
-                    </span>
+                    {(() => { const b = caseStatusBadge(c.Status); return (
+                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${b.className}`} style={b.style}>
+                        {c.Status}
+                      </span>
+                    ); })()}
                   </div>
                 </div>
               ))}
@@ -370,9 +383,11 @@ export default async function AccountDetailPage({
                               <p className="text-sm font-semibold text-gray-900">{displayName}</p>
                               <p className="text-xs text-gray-400 mt-0.5">{maskAccountNumber(fa.FinServ__FinancialAccountNumber__c)}</p>
                             </div>
-                            <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded font-medium ${faStatusClass(fa.FinServ__Status__c)}`}>
-                              {fa.FinServ__Status__c ?? "—"}
-                            </span>
+                            {(() => { const b = faStatusBadge(fa.FinServ__Status__c); return (
+                              <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded font-medium ${b.className}`} style={b.style}>
+                                {fa.FinServ__Status__c ?? "—"}
+                              </span>
+                            ); })()}
                           </div>
                           <p className="text-xl font-bold text-gray-900 mb-3">
                             {formatCurrency(fa.FinServ__Balance__c)}

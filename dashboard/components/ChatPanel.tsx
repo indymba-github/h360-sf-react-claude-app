@@ -170,7 +170,7 @@ function ToolCallsUsed({ toolCalls }: { toolCalls: ToolCall[] }) {
           key={j}
           className="inline-flex items-center gap-1 text-xs text-gray-400 bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5"
         >
-          <ToolIcon name={tc.name} />
+          <span style={{ color: "var(--color-secondary)" }}><ToolIcon name={tc.name} /></span>
           {tc.label}
         </span>
       ))}
@@ -191,7 +191,14 @@ function ToolCallsUsed({ toolCalls }: { toolCalls: ToolCall[] }) {
 function WriteResultBanner({ result }: { result: WriteResult }) {
   if (result.success) {
     return (
-      <div className="mt-2 flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5">
+      <div
+        className="mt-2 flex items-center gap-2 text-xs rounded-lg px-2.5 py-1.5 border"
+        style={{
+          color: "var(--color-secondary)",
+          background: "color-mix(in srgb, var(--color-secondary) 10%, white)",
+          borderColor: "color-mix(in srgb, var(--color-secondary) 25%, white)",
+        }}
+      >
         <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
         </svg>
@@ -201,7 +208,8 @@ function WriteResultBanner({ result }: { result: WriteResult }) {
             href={result.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="ml-auto flex items-center gap-1 text-emerald-600 hover:text-emerald-800 underline underline-offset-2"
+            className="ml-auto flex items-center gap-1 underline underline-offset-2"
+            style={{ color: "var(--color-secondary)" }}
           >
             View record
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -574,7 +582,7 @@ export default function ChatPanel({
       const res = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "message", text: trimmed }),
+        body: JSON.stringify({ action: "message", text: trimmed, accountContext }),
       });
       const data = await res.json() as { reply?: string; error?: string };
       if (!res.ok || data.error) throw new Error(data.error ?? "Agentforce request failed");
@@ -780,7 +788,7 @@ export default function ChatPanel({
           <div className="px-4 pt-3 pb-2.5 border-b border-gray-100 shrink-0 space-y-2">
             {/* Row 1: title + Claude label + clear button */}
             <div className="flex items-center gap-2.5">
-              <div className="w-2 h-2 rounded-full bg-green-400 shrink-0" />
+              <div className="w-2 h-2 rounded-full shrink-0" style={{ background: "var(--color-secondary)" }} />
               <span className="text-sm font-semibold text-gray-900">AI Assistant</span>
               <span className="text-xs text-gray-400 ml-auto mr-2">Claude</span>
               {messages.length > 0 && (
@@ -817,7 +825,14 @@ export default function ChatPanel({
             {/* Row 3: account context pill */}
             {accountContext && (
               <div className="flex items-center gap-1.5">
-                <span className="inline-flex items-center gap-1 text-[10px] text-gray-400 bg-gray-50 border border-gray-200 rounded-full px-2 py-0.5">
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] rounded-full px-2 py-0.5 border"
+                  style={{
+                    color: "var(--color-secondary)",
+                    background: "color-mix(in srgb, var(--color-secondary) 10%, white)",
+                    borderColor: "color-mix(in srgb, var(--color-secondary) 25%, white)",
+                  }}
+                >
                   <svg className="w-2.5 h-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21M3 3h12m-.75 4.5H21m-3.75 3.75h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Z" />
                   </svg>
@@ -846,7 +861,17 @@ export default function ChatPanel({
                     <button
                       key={label}
                       onClick={() => handleSuggestedPrompt(prompt)}
-                      className="text-xs px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 transition-colors"
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLElement).style.color = "var(--color-secondary)";
+                        (e.currentTarget as HTMLElement).style.borderColor = "color-mix(in srgb, var(--color-secondary) 40%, white)";
+                        (e.currentTarget as HTMLElement).style.background = "color-mix(in srgb, var(--color-secondary) 8%, white)";
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLElement).style.color = "";
+                        (e.currentTarget as HTMLElement).style.borderColor = "";
+                        (e.currentTarget as HTMLElement).style.background = "";
+                      }}
                     >
                       {label}
                     </button>

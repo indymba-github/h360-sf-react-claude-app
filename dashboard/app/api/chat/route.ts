@@ -199,18 +199,21 @@ function buildAccountContextBlock(ctx: AccountContext): string {
   if (ctx.annualRevenue) details.push(`Annual Revenue: $${ctx.annualRevenue.toLocaleString()}`);
   const detailStr = details.length > 0 ? ` (${details.join(", ")})` : "";
   return (
-    `The user is currently viewing the account record for ${ctx.accountName}${detailStr} ` +
-    `(ID: ${ctx.accountId}). ` +
-    `When the user refers to this client by first name, last name, or says "this account" or "this client", ` +
-    `they mean ${ctx.accountName}. ` +
-    `Use this account ID when calling tools for this account.`
+    `You are currently scoped to ${ctx.accountName}${detailStr} (Account ID: ${ctx.accountId}). ` +
+    `When the user uses pronouns like "her", "his", "their", uses a first name only, or says ` +
+    `"this account" or "this client", they are referring to ${ctx.accountName}. ` +
+    `Use account_id ${ctx.accountId} for these queries without asking for clarification.\n\n` +
+    `However, if the user explicitly names a different account, asks about the overall pipeline, ` +
+    `or asks a question that is clearly not about ${ctx.accountName}, respond to that question ` +
+    `normally using the appropriate tools. The account context is a default, not a constraint.`
   );
 }
 
 function buildSystemPrompt(mode: McpMode, resourceContext = "", accountContext?: AccountContext): string {
   const base = mode === "hosted" ? BASE_SYSTEM_PROMPT + HOSTED_PROMPT_ADDENDUM : BASE_SYSTEM_PROMPT;
-  const parts = [base];
+  const parts: string[] = [];
   if (accountContext) parts.push(buildAccountContextBlock(accountContext));
+  parts.push(base);
   if (resourceContext) parts.push(resourceContext);
   return parts.join("\n\n");
 }
@@ -384,6 +387,11 @@ export async function POST(request: NextRequest) {
   }
   const { messages, accountContext } = body;
 
+  console.log('=== ACCOUNT CONTEXT ===');
+  console.log('Context received:', accountContext ?
+    `${accountContext.accountName} (${accountContext.accountId})` :
+    'none');
+
   // Reference kept outside the stream so cancel() can abort an in-flight Anthropic stream
   let currentAnthropicStream: ReturnType<typeof anthropic.messages.stream> | null = null;
 
@@ -424,9 +432,8 @@ export async function POST(request: NextRequest) {
             const anthropicToolList = sanitizeToolPropertyNames([...normalizeTools(mcpTools), ...normalizePrompts(prompts)]);
 
             const systemPrompt = buildSystemPrompt(effectiveMode, "", accountContext);
-            console.log('=== SYSTEM PROMPT ===');
-            console.log('Length:', systemPrompt.length, 'chars');
-            console.log('Preview:', systemPrompt.substring(0, 500) + '...');
+            console.log('=== SYSTEM PROMPT PREVIEW ===');
+            console.log(systemPrompt.substring(0, 300));
 
             return anthropicToolList;
           }
@@ -438,9 +445,8 @@ export async function POST(request: NextRequest) {
           }
 
           const systemPrompt = buildSystemPrompt(effectiveMode, resourceContext, accountContext);
-          console.log('=== SYSTEM PROMPT ===');
-          console.log('Length:', systemPrompt.length, 'chars');
-          console.log('Preview:', systemPrompt.substring(0, 500) + '...');
+          console.log('=== SYSTEM PROMPT PREVIEW ===');
+          console.log(systemPrompt.substring(0, 300));
 
           promptNames = new Set();
           return sanitizeToolPropertyNames(normalizeTools(mcpTools));
@@ -500,6 +506,20 @@ export async function POST(request: NextRequest) {
           content: m.content,
         }));
 
+        // Prepend account context into the last user message so it's adjacent to the question
+        if (accountContext) {
+          const lastIdx = conversationMessages.length - 1;
+          const lastMsg = conversationMessages[lastIdx];
+          if (lastMsg?.role === "user" && typeof lastMsg.content === "string") {
+            const prefix = `[Context: The user is viewing ${accountContext.accountName}, Account ID ${accountContext.accountId}. ` +
+              `Pronouns like "her", "his", "their" and references like "this account" or "this client" refer to ${accountContext.accountName}.]`;
+            conversationMessages[lastIdx] = {
+              role: "user",
+              content: `${prefix} ${lastMsg.content}`,
+            };
+          }
+        }
+
         const toolCallsUsed: ToolCallRecord[] = [];
         let continueLoop = true;
         let loopIterations = 0;
@@ -519,6 +539,10 @@ export async function POST(request: NextRequest) {
             controller.enqueue(sseEvent({ type: "error", error: "Tool call limit reached — response may be incomplete." }));
             break;
           }
+          console.log('=== FULL SYSTEM PROMPT LENGTH ===');
+          console.log('Characters:', systemPrompt.length);
+          console.log('First 200 chars:', systemPrompt.substring(0, 200));
+          console.log('Last 200 chars:', systemPrompt.substring(systemPrompt.length - 200));
           const anthropicStream = anthropic.messages.stream({
             model: "claude-sonnet-4-6",
             max_tokens: 4096,
