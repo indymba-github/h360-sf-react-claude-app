@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { AppSettings } from "@/lib/settings";
 import type { BrandResult, TaggedColor } from "@/lib/brand-extractor";
 
@@ -53,56 +53,126 @@ function ColorInput({ label, value, onChange }: { label: string; value: string; 
   );
 }
 
-function ColorSwatch({
-  color,
-  label,
-  source,
+/**
+ * Renders a row of color swatches with a single shared popover.
+ * Only one swatch can be open at a time; clicking outside closes it.
+ */
+function ColorSwatchRow({
+  colors,
   onSetPrimary,
   onSetSecondary,
   onSetAccent,
 }: {
-  color: string;
-  label?: string;
-  source?: "css" | "ai";
+  colors: TaggedColor[];
   onSetPrimary: (c: string) => void;
   onSetSecondary: (c: string) => void;
   onSetAccent: (c: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [openIdx, setOpenIdx] = useState<number | null>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (openIdx === null) return;
+    function handler(e: MouseEvent) {
+      if (rowRef.current && !rowRef.current.contains(e.target as Node)) {
+        setOpenIdx(null);
+      }
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [openIdx]);
+
+  const ROLE_LABELS = ["primary", "secondary", "accent"];
+
   return (
-    <div className="relative">
-      <button
-        title={`${color}${source ? ` (${source === "ai" ? "AI" : "CSS"})` : ""}`}
-        onClick={() => setOpen(o => !o)}
-        className="w-8 h-8 rounded-lg border-2 border-white shadow ring-1 ring-gray-200 hover:scale-110 transition-transform"
-        style={{ background: color }}
-      />
-      {/* source badge */}
-      {source && (
-        <span
-          className={`absolute -top-1 -right-1 text-[7px] font-bold px-0.5 rounded leading-tight pointer-events-none ${
-            source === "ai"
-              ? "bg-purple-500 text-white"
-              : "bg-blue-500 text-white"
-          }`}
-        >
-          {source === "ai" ? "AI" : "CSS"}
-        </span>
-      )}
-      {label && <p className="text-[9px] text-center text-gray-400 mt-0.5 truncate w-8">{label}</p>}
-      {open && (
-        <div className="absolute top-9 left-0 z-20 bg-white border border-gray-200 rounded-lg shadow-lg p-2 text-xs whitespace-nowrap">
-          <p className="font-mono text-gray-500 px-1 mb-1">{color}</p>
-          {source && (
-            <p className="px-1 mb-1 text-gray-400">
-              Source: <span className={source === "ai" ? "text-purple-500" : "text-blue-500"}>{source === "ai" ? "AI analysis" : "CSS parsing"}</span>
-            </p>
-          )}
-          <button onClick={() => { onSetPrimary(color); setOpen(false); }} className="w-full text-left px-2 py-1 rounded hover:bg-gray-50">Use as Primary</button>
-          <button onClick={() => { onSetSecondary(color); setOpen(false); }} className="w-full text-left px-2 py-1 rounded hover:bg-gray-50">Use as Secondary</button>
-          <button onClick={() => { onSetAccent(color); setOpen(false); }} className="w-full text-left px-2 py-1 rounded hover:bg-gray-50">Use as Accent</button>
-        </div>
-      )}
+    <div ref={rowRef} className="flex flex-wrap gap-3">
+      {colors.map((t, i) => {
+        const isOpen = openIdx === i;
+        return (
+          <div key={`${t.hex}-${i}`} className="relative">
+            {/* Swatch button */}
+            <button
+              onClick={() => setOpenIdx(isOpen ? null : i)}
+              className="w-10 h-10 rounded-lg border border-gray-200 shadow-sm hover:scale-105 active:scale-95 transition-transform focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-400"
+              style={{ background: t.hex }}
+              aria-label={`Select color ${t.hex}`}
+            />
+            {/* Source badge */}
+            <span
+              className={`absolute -top-1 -right-1 text-[7px] font-bold px-0.5 rounded leading-tight pointer-events-none select-none ${
+                t.source === "ai" ? "bg-purple-500 text-white" : "bg-blue-500 text-white"
+              }`}
+            >
+              {t.source === "ai" ? "AI" : "CSS"}
+            </span>
+            {/* Role label below swatch */}
+            {i < 3 && (
+              <p className="text-[9px] text-center text-gray-400 mt-0.5">{ROLE_LABELS[i]}</p>
+            )}
+
+            {/* Popover — renders below the swatch */}
+            {isOpen && (
+              <div
+                className="absolute z-50 mt-2"
+                style={{ top: "100%", left: "50%", transform: "translateX(-50%)" }}
+              >
+                {/* Caret */}
+                <div
+                  className="mx-auto mb-[-1px]"
+                  style={{
+                    width: 0, height: 0,
+                    borderLeft: "6px solid transparent",
+                    borderRight: "6px solid transparent",
+                    borderBottom: "6px solid #E2E8F0",
+                    position: "relative", zIndex: 1,
+                    left: "50%", transform: "translateX(-50%)",
+                  }}
+                />
+                <div
+                  className="bg-white rounded-lg p-3 whitespace-nowrap"
+                  style={{
+                    border: "1px solid #E2E8F0",
+                    boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+                    minWidth: "160px",
+                  }}
+                >
+                  {/* Color preview + hex */}
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-5 h-5 rounded shrink-0 border border-gray-100" style={{ background: t.hex }} />
+                    <span className="text-xs font-bold font-mono text-gray-800">{t.hex}</span>
+                  </div>
+                  {/* Source */}
+                  <p className="text-[10px] text-gray-400 mb-2.5">
+                    {t.source === "ai" ? (
+                      <span className="text-purple-500 font-medium">AI detected</span>
+                    ) : (
+                      <span className="text-blue-500 font-medium">CSS parsing</span>
+                    )}
+                  </p>
+                  {/* Action pills */}
+                  <div className="flex gap-1.5">
+                    {(["Primary", "Secondary", "Accent"] as const).map((role) => (
+                      <button
+                        key={role}
+                        onClick={() => {
+                          if (role === "Primary") onSetPrimary(t.hex);
+                          else if (role === "Secondary") onSetSecondary(t.hex);
+                          else onSetAccent(t.hex);
+                          setOpenIdx(null);
+                        }}
+                        className="flex-1 text-[10px] font-medium px-1.5 py-1 rounded-full border border-gray-200 text-gray-600 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                      >
+                        {role}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -408,7 +478,7 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
 
               {/* Colors */}
               <div>
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between mb-3">
                   <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">
                     Colors found ({extracted.colors.all.length})
                   </p>
@@ -421,21 +491,16 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
                 </div>
                 {extracted.colors.all.length > 0 ? (
                   <>
-                    <div className="flex flex-wrap gap-3">
-                      {(extracted.colors.tagged ?? extracted.colors.all.map(h => ({ hex: h, source: "css" as const }))).map((t: TaggedColor, i: number) => (
-                        <ColorSwatch
-                          key={t.hex}
-                          color={t.hex}
-                          source={t.source}
-                          label={i === 0 ? "primary" : i === 1 ? "secondary" : i === 2 ? "accent" : undefined}
-                          onSetPrimary={setPrimary}
-                          onSetSecondary={setSecondary}
-                          onSetAccent={setAccent}
-                        />
-                      ))}
+                    {/* Extra bottom padding so popovers don't get clipped */}
+                    <div className="pb-32">
+                      <ColorSwatchRow
+                        colors={extracted.colors.tagged ?? extracted.colors.all.map(h => ({ hex: h, source: "css" as const }))}
+                        onSetPrimary={setPrimary}
+                        onSetSecondary={setSecondary}
+                        onSetAccent={setAccent}
+                      />
                     </div>
-                    <p className="text-[10px] text-gray-400 mt-2">Click a swatch to assign it as primary, secondary, or accent.</p>
-                    <div className="flex gap-2 mt-2">
+                    <div className="flex gap-2 mt-1">
                       {extracted.colors.primary && (
                         <button onClick={() => setPrimary(extracted.colors.primary!)} className="text-[10px] px-2 py-0.5 border border-gray-200 rounded text-gray-600 hover:bg-white transition-colors">Use suggested primary</button>
                       )}
