@@ -447,6 +447,50 @@ export default async function AccountDetailPage({
             </div>
           )}
         </div>
+
+        {/* Key Relationships */}
+        <div className="bg-white rounded-xl border border-gray-200 mb-6">
+          <div className="px-5 py-4 border-b border-gray-100">
+            <h2 className="text-sm font-semibold text-gray-900">
+              Key Relationships{" "}
+              {relationshipList.length > 0 && (
+                <span className="text-gray-400 font-normal">({relationshipList.length})</span>
+              )}
+            </h2>
+          </div>
+          {relationshipList.length === 0 ? (
+            <EmptySection message="No relationships found." />
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {relationshipList.map((rel) => {
+                const isSide1 = rel.FinServ__Account__c === acct.Id;
+                const otherName = isSide1
+                  ? rel.FinServ__RelatedAccount__r?.Name
+                  : rel.FinServ__Account__r?.Name;
+                const myRole = isSide1
+                  ? rel.FinServ__Role__r?.Name
+                  : rel.FinServ__InverseRelationship__r?.FinServ__Role__r?.Name;
+                const theirRole = isSide1
+                  ? rel.FinServ__InverseRelationship__r?.FinServ__Role__r?.Name
+                  : rel.FinServ__Role__r?.Name;
+                const rolesLabel = [myRole, theirRole].filter(Boolean).join(" / ");
+                return (
+                  <div key={rel.Id} className="flex items-start justify-between px-5 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{otherName ?? "—"}</p>
+                      {rolesLabel && (
+                        <p className="text-xs text-gray-400">{rolesLabel}</p>
+                      )}
+                    </div>
+                    {rel.FinServ__AssociationType__c && (
+                      <span className="text-xs text-gray-400 shrink-0 ml-4">{rel.FinServ__AssociationType__c}</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* AI chat panel */}
