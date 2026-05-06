@@ -379,3 +379,42 @@ export async function getFinancialAccountRoles(
     return [];
   }
 }
+
+export interface SFAccountRelationship {
+  Id: string;
+  FinServ__Active__c: boolean;
+  FinServ__AssociationType__c: string | null;
+  FinServ__Account__c: string;
+  FinServ__Account__r: { Name: string } | null;
+  FinServ__RelatedAccount__c: string;
+  FinServ__RelatedAccount__r: { Name: string } | null;
+  FinServ__Role__r: { Name: string } | null;
+  FinServ__InverseRelationship__r: { FinServ__Role__r: { Name: string } | null } | null;
+}
+
+export async function getAccountRelationships(
+  instanceUrl: string,
+  accessToken: string,
+  accountId: string
+): Promise<SFAccountRelationship[]> {
+  const safe = accountId.replace(/'/g, "\\'");
+  try {
+    return await sfQuery<SFAccountRelationship>(
+      instanceUrl,
+      accessToken,
+      `SELECT Id,
+              FinServ__Account__c, FinServ__Account__r.Name,
+              FinServ__RelatedAccount__c, FinServ__RelatedAccount__r.Name,
+              FinServ__AssociationType__c,
+              FinServ__Role__r.Name,
+              FinServ__InverseRelationship__r.FinServ__Role__r.Name,
+              FinServ__Active__c
+       FROM FinServ__AccountAccountRelation__c
+       WHERE (FinServ__Account__c = '${safe}'
+         OR FinServ__RelatedAccount__c = '${safe}')
+       AND FinServ__Active__c = true`
+    );
+  } catch {
+    return [];
+  }
+}
