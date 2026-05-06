@@ -129,6 +129,15 @@ export default async function AccountDetailPage({
 
   const sfRecordUrl = `${session.instanceUrl}/lightning/r/Account/${acct.Id}/view`;
 
+  // Group financial accounts by record type
+  const faByType = new Map<string, SFFinancialAccount[]>();
+  for (const fa of financialAccountList) {
+    const type = fa.RecordType?.Name ?? "Other";
+    const existing = faByType.get(type) ?? [];
+    existing.push(fa);
+    faByType.set(type, existing);
+  }
+
   return (
     <div className="flex h-full">
       <div className="flex-1 overflow-y-auto p-6 md:p-8">
@@ -323,6 +332,115 @@ export default async function AccountDetailPage({
                     <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${caseStatusClass(c.Status)}`}>
                       {c.Status}
                     </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Financial Accounts */}
+        <div className="bg-white rounded-xl border border-gray-200 mb-6">
+          <div className="px-5 py-4 border-b border-gray-100">
+            <h2 className="text-sm font-semibold text-gray-900">
+              Financial Accounts{" "}
+              {financialAccountList.length > 0 && (
+                <span className="text-gray-400 font-normal">({financialAccountList.length})</span>
+              )}
+            </h2>
+          </div>
+          {financialAccountList.length === 0 ? (
+            <EmptySection message="No financial accounts found." />
+          ) : (
+            <div className="px-5 py-4 space-y-6">
+              {Array.from(faByType.entries()).map(([type, accounts]) => (
+                <div key={type}>
+                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">{type}</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {accounts.map((fa) => {
+                      const roles = rolesMap.get(fa.Id) ?? [];
+                      const displayName = fa.Name || fa.FinServ__Nickname__c || "—";
+                      const loan = isLoanType(fa.RecordType?.Name ?? null);
+                      const rateLabel = fa.FinServ__APY__c != null ? "APY" : fa.FinServ__InterestRate__c != null ? "Rate" : null;
+                      const rateValue = fa.FinServ__APY__c ?? fa.FinServ__InterestRate__c;
+                      return (
+                        <div key={fa.Id} className="border border-gray-200 rounded-lg p-4">
+                          <div className="flex items-start justify-between gap-2 mb-3">
+                            <div>
+                              <p className="text-sm font-semibold text-gray-900">{displayName}</p>
+                              <p className="text-xs text-gray-400 mt-0.5">{maskAccountNumber(fa.FinServ__FinancialAccountNumber__c)}</p>
+                            </div>
+                            <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded font-medium ${faStatusClass(fa.FinServ__Status__c)}`}>
+                              {fa.FinServ__Status__c ?? "—"}
+                            </span>
+                          </div>
+                          <p className="text-xl font-bold text-gray-900 mb-3">
+                            {formatCurrency(fa.FinServ__Balance__c)}
+                          </p>
+                          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs mb-3">
+                            {fa.FinServ__FinancialAccountType__c && (
+                              <>
+                                <dt className="text-gray-400">Type</dt>
+                                <dd className="text-gray-700">{fa.FinServ__FinancialAccountType__c}</dd>
+                              </>
+                            )}
+                            {rateLabel && rateValue != null && (
+                              <>
+                                <dt className="text-gray-400">{rateLabel}</dt>
+                                <dd className="text-gray-700">{(rateValue * 100).toFixed(2)}%</dd>
+                              </>
+                            )}
+                            {loan && fa.FinServ__LoanAmount__c != null && (
+                              <>
+                                <dt className="text-gray-400">Loan Amount</dt>
+                                <dd className="text-gray-700">{formatCurrency(fa.FinServ__LoanAmount__c)}</dd>
+                              </>
+                            )}
+                            {loan && fa.FinServ__PrincipalBalance__c != null && (
+                              <>
+                                <dt className="text-gray-400">Principal</dt>
+                                <dd className="text-gray-700">{formatCurrency(fa.FinServ__PrincipalBalance__c)}</dd>
+                              </>
+                            )}
+                            {loan && fa.FinServ__PaymentAmount__c != null && (
+                              <>
+                                <dt className="text-gray-400">Payment</dt>
+                                <dd className="text-gray-700">{formatCurrency(fa.FinServ__PaymentAmount__c)}</dd>
+                              </>
+                            )}
+                            {loan && fa.FinServ__PaymentDueDate__c && (
+                              <>
+                                <dt className="text-gray-400">Due Date</dt>
+                                <dd className="text-gray-700">{formatDate(fa.FinServ__PaymentDueDate__c)}</dd>
+                              </>
+                            )}
+                          </dl>
+                          {roles.length > 0 && (
+                            <details className="mt-2">
+                              <summary className="text-xs text-blue-600 cursor-pointer hover:text-blue-800 select-none">
+                                Show roles ({roles.length})
+                              </summary>
+                              <ul className="mt-2 space-y-1">
+                                {roles.map((role) => {
+                                  const personName =
+                                    role.FinServ__RelatedContact__r?.Name ??
+                                    role.FinServ__RelatedAccount__r?.Name ??
+                                    "—";
+                                  return (
+                                    <li key={role.Id} className="flex items-center gap-2 text-xs text-gray-600">
+                                      <span className="font-medium">{personName}</span>
+                                      {role.FinServ__Role__c && (
+                                        <span className="text-gray-400">· {role.FinServ__Role__c}</span>
+                                      )}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </details>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ))}
