@@ -6,6 +6,14 @@ import remarkGfm from "remark-gfm";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
+export interface AccountContext {
+  accountId: string;
+  accountName: string;
+  industry?: string | null;
+  annualRevenue?: number | null;
+  type?: string | null;
+}
+
 interface ToolCall {
   name: string;
   label: string;
@@ -378,6 +386,7 @@ const STORAGE_MESSAGES_KEY  = "sf-chat-messages";
 const STORAGE_MODE_KEY      = "sf-chat-mcp-mode";
 const STORAGE_WIDTH_KEY     = "sf-chat-width";
 const STORAGE_COLLAPSED_KEY = "sf-chat-collapsed";
+const STORAGE_CONTEXT_KEY   = "sf-chat-account-context";
 
 const MIN_WIDTH      = 320;
 const MAX_WIDTH      = 700;
@@ -387,11 +396,11 @@ const COLLAPSED_WIDTH = 40;
 // ── Main component ─────────────────────────────────────────────────────────
 
 export default function ChatPanel({
-  initialContext,
+  accountContext: accountContextProp,
   initialMcpMode = "local",
   hasMcpToken = false,
 }: {
-  initialContext?: string;
+  accountContext?: AccountContext;
   initialMcpMode?: McpMode;
   hasMcpToken?: boolean;
 }) {
@@ -407,6 +416,7 @@ export default function ChatPanel({
   const [panelWidth, setPanelWidth]         = useState(DEFAULT_WIDTH);
   const [collapsed, setCollapsed]           = useState(false);
   const [isResizing, setIsResizing]         = useState(false);
+  const [accountContext, setAccountContext] = useState<AccountContext | undefined>(accountContextProp);
   // Accumulates write_complete events for the current response turn
   const pendingWriteRef  = useRef<WriteResult | null>(null);
   const isDragging       = useRef(false);
@@ -451,6 +461,19 @@ export default function ChatPanel({
       if (saved === "true") setCollapsed(true);
     } catch {}
   }, []);
+
+  // Load account context from sessionStorage (fallback when prop not provided)
+  useEffect(() => {
+    if (accountContextProp) {
+      setAccountContext(accountContextProp);
+      try { sessionStorage.setItem(STORAGE_CONTEXT_KEY, JSON.stringify(accountContextProp)); } catch {}
+      return;
+    }
+    try {
+      const saved = sessionStorage.getItem(STORAGE_CONTEXT_KEY);
+      if (saved) setAccountContext(JSON.parse(saved) as AccountContext);
+    } catch {}
+  }, [accountContextProp]);
 
   // Persist on every change
   useEffect(() => {
@@ -595,19 +618,14 @@ export default function ChatPanel({
       }
 
       // ── MCP / Claude path ──────────────────────────────────────────
-      const historyWithContext: Message[] =
-        initialContext && messages.length === 0
-          ? [{ role: "user", content: initialContext }, ...messages]
-          : messages;
-
-      const outgoingMessages = [...historyWithContext, userMsg];
+      const outgoingMessages = [...messages, userMsg];
 
       // Attempt fetch, with a single token-refresh retry on 401
       const doFetch = async (retried = false): Promise<Response> => {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: outgoingMessages }),
+          body: JSON.stringify({ messages: outgoingMessages, accountContext }),
         });
         if (res.status === 401 && !retried) {
           const refreshRes = await fetch("/api/auth/refresh", { method: "POST" });
@@ -692,7 +710,7 @@ export default function ChatPanel({
         setLoading(false);
       }
     },
-    [loading, messages, initialContext, mcpMode, sendAgentforce]
+    [loading, messages, accountContext, mcpMode, sendAgentforce]
   );
 
   function handleSubmit(e: React.FormEvent) {
@@ -796,6 +814,17 @@ export default function ChatPanel({
                 {MODE_LABELS[mcpMode]}
               </span>
             </div>
+            {/* Row 3: account context pill */}
+            {accountContext && (
+              <div className="flex items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 text-[10px] text-gray-400 bg-gray-50 border border-gray-200 rounded-full px-2 py-0.5">
+                  <svg className="w-2.5 h-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21M3 3h12m-.75 4.5H21m-3.75 3.75h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Z" />
+                  </svg>
+                  Viewing: {accountContext.accountName}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* ── Messages ── */}

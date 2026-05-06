@@ -495,7 +495,13 @@ export default async function AccountDetailPage({
 
       {/* AI chat panel */}
       <ChatPanel
-        initialContext={`I'm looking at the account: ${acct.Name} (ID: ${acct.Id})`}
+        accountContext={{
+          accountId: acct.Id,
+          accountName: acct.Name,
+          industry: acct.Industry,
+          annualRevenue: acct.AnnualRevenue,
+          type: acct.Type,
+        }}
         initialMcpMode={effectiveMcpMode}
         hasMcpToken={!!session.mcpAccessToken}
       />

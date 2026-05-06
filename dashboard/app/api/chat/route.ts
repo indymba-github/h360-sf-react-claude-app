@@ -184,9 +184,35 @@ const HOSTED_PROMPT_ADDENDUM =
   "After calling a prompt template, present the result directly. " +
   "Only make additional individual tool calls if the user asks a specific follow-up question that the template result didn't answer.";
 
-function buildSystemPrompt(mode: McpMode, resourceContext = ""): string {
+interface AccountContext {
+  accountId: string;
+  accountName: string;
+  industry?: string | null;
+  annualRevenue?: number | null;
+  type?: string | null;
+}
+
+function buildAccountContextBlock(ctx: AccountContext): string {
+  const details: string[] = [];
+  if (ctx.type)          details.push(`Type: ${ctx.type}`);
+  if (ctx.industry)      details.push(`Industry: ${ctx.industry}`);
+  if (ctx.annualRevenue) details.push(`Annual Revenue: $${ctx.annualRevenue.toLocaleString()}`);
+  const detailStr = details.length > 0 ? ` (${details.join(", ")})` : "";
+  return (
+    `The user is currently viewing the account record for ${ctx.accountName}${detailStr} ` +
+    `(ID: ${ctx.accountId}). ` +
+    `When the user refers to this client by first name, last name, or says "this account" or "this client", ` +
+    `they mean ${ctx.accountName}. ` +
+    `Use this account ID when calling tools for this account.`
+  );
+}
+
+function buildSystemPrompt(mode: McpMode, resourceContext = "", accountContext?: AccountContext): string {
   const base = mode === "hosted" ? BASE_SYSTEM_PROMPT + HOSTED_PROMPT_ADDENDUM : BASE_SYSTEM_PROMPT;
-  return resourceContext ? `${base}\n\n${resourceContext}` : base;
+  const parts = [base];
+  if (accountContext) parts.push(buildAccountContextBlock(accountContext));
+  if (resourceContext) parts.push(resourceContext);
+  return parts.join("\n\n");
 }
 
 // Human-readable labels for completed tool calls (shown as badges on the message)
@@ -352,11 +378,11 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const body = await request.json().catch(() => null) as { messages?: ChatMessage[] } | null;
+  const body = await request.json().catch(() => null) as { messages?: ChatMessage[]; accountContext?: AccountContext } | null;
   if (!body?.messages?.length) {
     return NextResponse.json({ error: "messages required" }, { status: 400 });
   }
-  const { messages } = body;
+  const { messages, accountContext } = body;
 
   // Reference kept outside the stream so cancel() can abort an in-flight Anthropic stream
   let currentAnthropicStream: ReturnType<typeof anthropic.messages.stream> | null = null;
@@ -397,7 +423,7 @@ export async function POST(request: NextRequest) {
             promptNames = new Set(prompts.map(p => p.name));
             const anthropicToolList = sanitizeToolPropertyNames([...normalizeTools(mcpTools), ...normalizePrompts(prompts)]);
 
-            const systemPrompt = buildSystemPrompt(effectiveMode, "");
+            const systemPrompt = buildSystemPrompt(effectiveMode, "", accountContext);
             console.log('=== SYSTEM PROMPT ===');
             console.log('Length:', systemPrompt.length, 'chars');
             console.log('Preview:', systemPrompt.substring(0, 500) + '...');
@@ -411,7 +437,7 @@ export async function POST(request: NextRequest) {
             resourceContext = await fetchResourceContext(mcpClient, `${session.userId ?? "anon"}:${session.instanceUrl!}`);
           }
 
-          const systemPrompt = buildSystemPrompt(effectiveMode, resourceContext);
+          const systemPrompt = buildSystemPrompt(effectiveMode, resourceContext, accountContext);
           console.log('=== SYSTEM PROMPT ===');
           console.log('Length:', systemPrompt.length, 'chars');
           console.log('Preview:', systemPrompt.substring(0, 500) + '...');
