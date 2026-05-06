@@ -359,7 +359,7 @@ export default async function AccountDetailPage({
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {accounts.map((fa) => {
                       const roles = rolesMap.get(fa.Id) ?? [];
-                      const displayName = fa.Name || fa.FinServ__Nickname__c || "—";
+                      const displayName = fa.FinServ__Nickname__c || fa.Name || "—";
                       const loan = isLoanType(fa.RecordType?.Name ?? null);
                       const rateLabel = fa.FinServ__APY__c != null ? "APY" : fa.FinServ__InterestRate__c != null ? "Rate" : null;
                       const rateValue = fa.FinServ__APY__c ?? fa.FinServ__InterestRate__c;
