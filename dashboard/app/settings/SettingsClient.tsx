@@ -253,6 +253,12 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
   const [borderRadius, setBorderRadius]     = useState(initial.borderRadius);
   const [sidebarStyle, setSidebarStyle]     = useState<"dark" | "light">(initial.sidebarStyle);
 
+  // Tracks whether any setting has been changed since last save
+  const [dirty, setDirty] = useState(false);
+
+  // Tracks which color roles have been applied from swatches (for inline feedback)
+  const [appliedColors, setAppliedColors] = useState<{ primary?: string; secondary?: string; accent?: string }>({});
+
   // UI state
   const [saving, setSaving]       = useState(false);
   const [savedMsg, setSavedMsg]   = useState<string | null>(null);
@@ -266,10 +272,41 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
   const [extractError, setExtractError]   = useState<string | null>(null);
   const [extracted, setExtracted]         = useState<BrandResult | null>(null);
 
+  // Log loaded settings on mount
+  useEffect(() => {
+    console.log("Loaded settings:", initial);
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // Computed preview values (fall back to defaults for invalid hex)
   const prevPrimary   = isValidHex(primary)   ? primary   : DEFAULTS.primaryColor;
   const prevSecondary = isValidHex(secondary)  ? secondary : DEFAULTS.secondaryColor;
   const prevName      = appName.trim() || DEFAULTS.appName;
+
+  // ── Wrapped setters that mark the form dirty ────────────────────────────────
+
+  function setAndDirty<T>(setter: (v: T) => void) {
+    return (v: T) => { setter(v); setDirty(true); };
+  }
+
+  // Swatch-specific setters: log + update state + show applied feedback
+  function applyPrimary(hex: string) {
+    console.log("Setting primary to:", hex);
+    setPrimary(hex);
+    setDirty(true);
+    setAppliedColors(prev => ({ ...prev, primary: hex }));
+  }
+  function applySecondary(hex: string) {
+    console.log("Setting secondary to:", hex);
+    setSecondary(hex);
+    setDirty(true);
+    setAppliedColors(prev => ({ ...prev, secondary: hex }));
+  }
+  function applyAccent(hex: string) {
+    console.log("Setting accent to:", hex);
+    setAccent(hex);
+    setDirty(true);
+    setAppliedColors(prev => ({ ...prev, accent: hex }));
+  }
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
@@ -278,7 +315,7 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
     if (!file) return;
     if (file.size > 200 * 1024) { setError("Logo must be 200 KB or smaller."); return; }
     const reader = new FileReader();
-    reader.onload = () => setLogo(reader.result as string);
+    reader.onload = () => { setLogo(reader.result as string); setDirty(true); };
     reader.readAsDataURL(file);
   }
 
@@ -313,15 +350,15 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
 
   function applyAll() {
     if (!extracted) return;
-    if (extracted.colors.primary)   setPrimary(extracted.colors.primary);
-    if (extracted.colors.secondary) setSecondary(extracted.colors.secondary);
-    if (extracted.colors.accent)    setAccent(extracted.colors.accent);
-    if (extracted.companyName)      setAppName(extracted.companyName.slice(0, 30));
-    if (extracted.logo)             setLogo(extracted.logo);
-    if (extracted.fonts.heading)    setHeadingFont(extracted.fonts.heading);
-    if (extracted.fonts.body)       setBodyFont(extracted.fonts.body);
-    if (extracted.fonts.headingImportUrl) setHeadingFontUrl(extracted.fonts.headingImportUrl);
-    if (extracted.fonts.bodyImportUrl)    setBodyFontUrl(extracted.fonts.bodyImportUrl);
+    if (extracted.colors.primary)   applyPrimary(extracted.colors.primary);
+    if (extracted.colors.secondary) applySecondary(extracted.colors.secondary);
+    if (extracted.colors.accent)    applyAccent(extracted.colors.accent);
+    if (extracted.companyName)      { setAppName(extracted.companyName.slice(0, 30)); setDirty(true); }
+    if (extracted.logo)             { setLogo(extracted.logo); setDirty(true); }
+    if (extracted.fonts.heading)    { setHeadingFont(extracted.fonts.heading); setDirty(true); }
+    if (extracted.fonts.body)       { setBodyFont(extracted.fonts.body); setDirty(true); }
+    if (extracted.fonts.headingImportUrl) { setHeadingFontUrl(extracted.fonts.headingImportUrl); setDirty(true); }
+    if (extracted.fonts.bodyImportUrl)    { setBodyFontUrl(extracted.fonts.bodyImportUrl); setDirty(true); }
   }
 
   async function save() {
@@ -330,6 +367,21 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
     if (!isValidHex(accent))    { setError("Invalid accent color hex."); return; }
     if (appName.length > 30)    { setError("App name must be 30 characters or fewer."); return; }
 
+    const payload = {
+      primaryColor: primary,
+      secondaryColor: secondary,
+      accentColor: accent,
+      appName: appName.trim() || DEFAULTS.appName,
+      logoBase64: logo,
+      headingFont,
+      bodyFont,
+      headingFontUrl,
+      bodyFontUrl,
+      borderRadius,
+      sidebarStyle,
+    };
+    console.log("Saving settings:", payload);
+
     setSaving(true);
     setError(null);
     setSavedMsg(null);
@@ -337,24 +389,14 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
       const res = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          primaryColor: primary,
-          secondaryColor: secondary,
-          accentColor: accent,
-          appName: appName.trim() || DEFAULTS.appName,
-          logoBase64: logo,
-          headingFont,
-          bodyFont,
-          headingFontUrl,
-          bodyFontUrl,
-          borderRadius,
-          sidebarStyle,
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const data = await res.json() as { error?: string };
         throw new Error(data.error ?? "Save failed");
       }
+      setDirty(false);
+      setAppliedColors({});
       setSavedMsg("Settings saved. Reload the page to see changes.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
@@ -386,6 +428,8 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
       setBorderRadius(DEFAULTS.borderRadius);
       setSidebarStyle(DEFAULTS.sidebarStyle);
       if (fileRef.current) fileRef.current.value = "";
+      setDirty(false);
+      setAppliedColors({});
       setSavedMsg("Reset to defaults. Reload the page to see changes.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Reset failed");
@@ -563,7 +607,7 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
               type="text"
               value={appName}
               maxLength={30}
-              onChange={(e) => setAppName(e.target.value)}
+              onChange={(e) => { setAppName(e.target.value); setDirty(true); }}
               placeholder="SF Dashboard"
               className="w-full text-sm px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
@@ -603,11 +647,35 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
         {/* Colors section */}
         <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
           <h2 className="text-sm font-semibold text-gray-900">Colors</h2>
-          <ColorInput label="Primary Color" value={primary} onChange={setPrimary} />
+          {/* Applied-from-swatch feedback strip */}
+          {(appliedColors.primary || appliedColors.secondary || appliedColors.accent) && (
+            <div className="flex flex-wrap gap-2 p-2.5 bg-green-50 border border-green-200 rounded-lg">
+              <span className="text-[10px] text-green-700 font-medium w-full">Applied from swatches — click Save settings to persist:</span>
+              {appliedColors.primary && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-green-700">
+                  <span className="w-3 h-3 rounded-sm border border-green-300 inline-block" style={{ background: appliedColors.primary }} />
+                  Primary: {appliedColors.primary}
+                </span>
+              )}
+              {appliedColors.secondary && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-green-700">
+                  <span className="w-3 h-3 rounded-sm border border-green-300 inline-block" style={{ background: appliedColors.secondary }} />
+                  Secondary: {appliedColors.secondary}
+                </span>
+              )}
+              {appliedColors.accent && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-green-700">
+                  <span className="w-3 h-3 rounded-sm border border-green-300 inline-block" style={{ background: appliedColors.accent }} />
+                  Accent: {appliedColors.accent}
+                </span>
+              )}
+            </div>
+          )}
+          <ColorInput label="Primary Color" value={primary} onChange={setAndDirty(setPrimary)} />
           <p className="text-xs text-gray-400 -mt-3">Sidebar background, buttons, active nav items.</p>
-          <ColorInput label="Secondary Color" value={secondary} onChange={setSecondary} />
+          <ColorInput label="Secondary Color" value={secondary} onChange={setAndDirty(setSecondary)} />
           <p className="text-xs text-gray-400 -mt-3">Badges, charts, pipeline bars, accents.</p>
-          <ColorInput label="Accent Color" value={accent} onChange={setAccent} />
+          <ColorInput label="Accent Color" value={accent} onChange={setAndDirty(setAccent)} />
           <p className="text-xs text-gray-400 -mt-3">Highlights, alerts, call-to-action elements.</p>
         </section>
 
@@ -619,7 +687,7 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
             <input
               type="text"
               value={headingFont}
-              onChange={(e) => setHeadingFont(e.target.value)}
+              onChange={(e) => { setHeadingFont(e.target.value); setDirty(true); }}
               placeholder="Inter"
               className="w-full text-sm px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
@@ -629,7 +697,7 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
             <input
               type="text"
               value={bodyFont}
-              onChange={(e) => setBodyFont(e.target.value)}
+              onChange={(e) => { setBodyFont(e.target.value); setDirty(true); }}
               placeholder="Inter"
               className="w-full text-sm px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
@@ -660,7 +728,7 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
               min={0}
               max={16}
               value={borderRadius}
-              onChange={(e) => setBorderRadius(parseInt(e.target.value, 10))}
+              onChange={(e) => { setBorderRadius(parseInt(e.target.value, 10)); setDirty(true); }}
               className="w-full accent-blue-600"
             />
             <div className="flex justify-between text-[10px] text-gray-400 mt-1">
@@ -671,7 +739,7 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
               {[0, 4, 8, 12, 16].map(r => (
                 <button
                   key={r}
-                  onClick={() => setBorderRadius(r)}
+                  onClick={() => { setBorderRadius(r); setDirty(true); }}
                   className={`w-10 h-8 border text-[10px] text-gray-500 transition-colors ${borderRadius === r ? "border-blue-400 bg-blue-50" : "border-gray-200 hover:border-gray-300"}`}
                   style={{ borderRadius: `${r}px` }}
                 >
@@ -688,7 +756,7 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
               {(["dark", "light"] as const).map((style) => (
                 <button
                   key={style}
-                  onClick={() => setSidebarStyle(style)}
+                  onClick={() => { setSidebarStyle(style); setDirty(true); }}
                   className={`flex-1 flex flex-col items-center gap-2 p-3 rounded-lg border-2 transition-colors ${
                     sidebarStyle === style ? "border-blue-500 bg-blue-50" : "border-gray-200 hover:border-gray-300"
                   }`}
@@ -712,13 +780,23 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
         </section>
 
         {/* Actions */}
+        {dirty && !saving && !savedMsg && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+            <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+            </svg>
+            Unsaved changes — click Save settings to persist.
+          </div>
+        )}
         {error && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
         {savedMsg && <p className="text-sm text-gray-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">{savedMsg}</p>}
         <div className="flex items-center gap-3">
           <button
             onClick={save}
             disabled={saving}
-            className="px-5 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className={`px-5 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
+              dirty ? "bg-blue-600 hover:bg-blue-500 ring-2 ring-blue-300" : "bg-blue-600 hover:bg-blue-500"
+            }`}
           >
             {saving ? "Saving…" : "Save settings"}
           </button>
