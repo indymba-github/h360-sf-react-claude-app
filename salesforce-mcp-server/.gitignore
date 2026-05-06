@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment — contains credentials
+.env
+
+# RSA private key — NEVER commit
+server.key
+
+# macOS
+.DS_Store

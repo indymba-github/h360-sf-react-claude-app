@@ -1,0 +1,23 @@
+{
+  "name": "salesforce-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server exposing Salesforce CRM data as tools for AI agents",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^16.4.5",
+    "jsforce": "^3.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}
