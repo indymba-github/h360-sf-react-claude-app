@@ -31,6 +31,8 @@ import {
   getFinancialHoldings, getFinancialHoldingsSchema,
   getAssetsLiabilities, getAssetsLiabilitiesSchema,
   getClientSummary, getClientSummarySchema,
+  getFinancialAccountRoles, getFinancialAccountRolesSchema,
+  getAccountRelationships, getAccountRelationshipsSchema,
 } from "./tools/financial.js";
 import { toMcpError } from "./utils/errors.js";
 import { RESOURCES, readResource } from "./resources.js";
@@ -219,6 +221,30 @@ const TOOLS = [
   {
     name: "sf_get_client_summary",
     description: "Get a comprehensive financial summary for a client. Aggregates financial accounts by type, calculates total balances, and provides a net worth snapshot. Use this when someone asks for an overview of a client's financial position.",
+    annotations: READ_ONLY,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        account_id: { type: "string", description: "Salesforce Account ID" },
+      },
+      required: ["account_id"],
+    },
+  },
+  {
+    name: "sf_get_financial_account_roles",
+    description: "Get the roles and relationships associated with a financial account. Shows joint owners, beneficiaries, authorized signers, etc.",
+    annotations: READ_ONLY,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        financial_account_id: { type: "string", description: "Financial Account record ID" },
+      },
+      required: ["financial_account_id"],
+    },
+  },
+  {
+    name: "sf_get_account_relationships",
+    description: "Get household and account-to-account relationships. Shows how accounts are connected, such as household members, business partners, etc.",
     annotations: READ_ONLY,
     inputSchema: {
       type: "object" as const,
@@ -421,6 +447,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "sf_get_client_summary": {
         const input = getClientSummarySchema.parse(args ?? {});
         const { text, data } = await getClientSummary(input);
+        return { content: makeContent(text, data) };
+      }
+
+      case "sf_get_financial_account_roles": {
+        const input = getFinancialAccountRolesSchema.parse(args ?? {});
+        const { text, data } = await getFinancialAccountRoles(input);
+        return { content: makeContent(text, data) };
+      }
+
+      case "sf_get_account_relationships": {
+        const input = getAccountRelationshipsSchema.parse(args ?? {});
+        const { text, data } = await getAccountRelationships(input);
         return { content: makeContent(text, data) };
       }
 

@@ -621,3 +621,167 @@ export async function getClientSummary(
     throw new Error(`sf_get_client_summary failed: ${toMcpError(err)}`);
   }
 }
+
+// ── sf_get_financial_account_roles ────────────────────────────────────────
+
+export const getFinancialAccountRolesSchema = z.object({
+  financial_account_id: z
+    .string()
+    .min(1)
+    .describe("Financial Account record ID"),
+});
+
+export type GetFinancialAccountRolesInput = z.infer<typeof getFinancialAccountRolesSchema>;
+
+interface FinancialAccountRoleRecord extends SFQueryRecord {
+  Id: string;
+  Name: string;
+  FinServ__Role__c: string | null;
+  FinServ__RelatedAccount__c: string | null;
+  FinServ__RelatedAccount__r: { Name: string } | null;
+  FinServ__RelatedContact__c: string | null;
+  FinServ__RelatedContact__r: { Name: string } | null;
+  FinServ__Active__c: boolean;
+}
+
+export interface FinancialAccountRole {
+  id: string;
+  name: string;
+  role: string | null;
+  relatedAccountId: string | null;
+  relatedAccountName: string | null;
+  relatedContactId: string | null;
+  relatedContactName: string | null;
+  active: boolean;
+}
+
+export async function getFinancialAccountRoles(
+  input: GetFinancialAccountRolesInput
+): Promise<{ text: string; data: FinancialAccountRole[] }> {
+  const safe = input.financial_account_id.replace(/'/g, "\\'");
+
+  const soql = `
+    SELECT Id, Name,
+      FinServ__Role__c,
+      FinServ__RelatedAccount__c,
+      FinServ__RelatedAccount__r.Name,
+      FinServ__RelatedContact__c,
+      FinServ__RelatedContact__r.Name,
+      FinServ__Active__c
+    FROM FinServ__FinancialAccountRole__c
+    WHERE FinServ__FinancialAccount__c = '${safe}'
+    AND FinServ__Active__c = true
+  `.trim();
+
+  try {
+    const records = await query<FinancialAccountRoleRecord>(soql);
+
+    const data: FinancialAccountRole[] = records.map((r) => ({
+      id: r.Id,
+      name: r.Name,
+      role: r.FinServ__Role__c,
+      relatedAccountId: r.FinServ__RelatedAccount__c,
+      relatedAccountName: r.FinServ__RelatedAccount__r?.Name ?? null,
+      relatedContactId: r.FinServ__RelatedContact__c,
+      relatedContactName: r.FinServ__RelatedContact__r?.Name ?? null,
+      active: r.FinServ__Active__c,
+    }));
+
+    const header = `Found ${data.length} active role(s) for financial account:\n${"─".repeat(40)}`;
+    const body = formatList(data, (r, i) => {
+      const person = r.relatedContactName ?? r.relatedAccountName ?? "Unknown";
+      return [
+        `${i + 1}. ${person}`,
+        `   Role: ${r.role ?? "N/A"}`,
+      ].join("\n");
+    });
+
+    return { text: `${header}\n\n${body}`, data };
+  } catch (err) {
+    throw new Error(`sf_get_financial_account_roles failed: ${toMcpError(err)}`);
+  }
+}
+
+// ── sf_get_account_relationships ──────────────────────────────────────────
+
+export const getAccountRelationshipsSchema = z.object({
+  account_id: z
+    .string()
+    .min(1)
+    .describe("Salesforce Account ID"),
+});
+
+export type GetAccountRelationshipsInput = z.infer<typeof getAccountRelationshipsSchema>;
+
+interface AccountRelationshipRecord extends SFQueryRecord {
+  Id: string;
+  FinServ__Account__c: string;
+  FinServ__Account__r: { Name: string } | null;
+  FinServ__RelatedAccount__c: string;
+  FinServ__RelatedAccount__r: { Name: string } | null;
+  FinServ__AssociationType__c: string | null;
+  FinServ__Role__r: { Name: string } | null;
+  FinServ__Active__c: boolean;
+}
+
+export interface AccountRelationship {
+  id: string;
+  accountId: string;
+  accountName: string | null;
+  relatedAccountId: string;
+  relatedAccountName: string | null;
+  associationType: string | null;
+  role: string | null;
+  active: boolean;
+}
+
+export async function getAccountRelationships(
+  input: GetAccountRelationshipsInput
+): Promise<{ text: string; data: AccountRelationship[] }> {
+  const safe = input.account_id.replace(/'/g, "\\'");
+
+  const soql = `
+    SELECT Id,
+      FinServ__Account__c,
+      FinServ__Account__r.Name,
+      FinServ__RelatedAccount__c,
+      FinServ__RelatedAccount__r.Name,
+      FinServ__AssociationType__c,
+      FinServ__Role__r.Name,
+      FinServ__Active__c
+    FROM FinServ__AccountAccountRelation__c
+    WHERE (FinServ__Account__c = '${safe}'
+      OR FinServ__RelatedAccount__c = '${safe}')
+    AND FinServ__Active__c = true
+  `.trim();
+
+  try {
+    const records = await query<AccountRelationshipRecord>(soql);
+
+    const data: AccountRelationship[] = records.map((r) => ({
+      id: r.Id,
+      accountId: r.FinServ__Account__c,
+      accountName: r.FinServ__Account__r?.Name ?? null,
+      relatedAccountId: r.FinServ__RelatedAccount__c,
+      relatedAccountName: r.FinServ__RelatedAccount__r?.Name ?? null,
+      associationType: r.FinServ__AssociationType__c,
+      role: r.FinServ__Role__r?.Name ?? null,
+      active: r.FinServ__Active__c,
+    }));
+
+    const header = `Found ${data.length} active relationship(s):\n${"─".repeat(40)}`;
+    const body = formatList(data, (r, i) => {
+      const otherName = r.accountId === input.account_id
+        ? (r.relatedAccountName ?? r.relatedAccountId)
+        : (r.accountName ?? r.accountId);
+      return [
+        `${i + 1}. ${otherName}`,
+        `   Role: ${r.role ?? "N/A"}  |  Type: ${r.associationType ?? "N/A"}`,
+      ].join("\n");
+    });
+
+    return { text: `${header}\n\n${body}`, data };
+  } catch (err) {
+    throw new Error(`sf_get_account_relationships failed: ${toMcpError(err)}`);
+  }
+}
