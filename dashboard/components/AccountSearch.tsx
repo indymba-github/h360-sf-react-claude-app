@@ -156,7 +156,10 @@ export default function AccountSearch({
                   </a>
                   <div className="flex items-center gap-1.5 shrink-0">
                     {a.Type && (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium">
+                      <span
+                        className="text-xs px-1.5 py-0.5 rounded font-medium"
+                        style={{ background: "color-mix(in srgb, var(--color-secondary) 12%, white)", color: "var(--color-secondary)" }}
+                      >
                         {a.Type}
                       </span>
                     )}

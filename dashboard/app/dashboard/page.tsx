@@ -32,7 +32,7 @@ function formatDate(value: string): string {
 function KpiCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5">
-      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">{label}</p>
+      <p className="text-xs font-medium uppercase tracking-wide" style={{ color: "var(--color-secondary)" }}>{label}</p>
       <p className="mt-2 text-3xl font-bold text-gray-900 tabular-nums">{value}</p>
       {sub && <p className="mt-1 text-xs text-gray-400">{sub}</p>}
     </div>
@@ -133,7 +133,7 @@ export default async function DashboardPage() {
           <div className="bg-white rounded-xl border border-gray-200">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
               <h2 className="text-sm font-semibold text-gray-900">Top Accounts</h2>
-              <a href="/accounts" className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+              <a href="/accounts" className="text-xs font-medium transition-colors" style={{ color: "var(--color-secondary)" }}>
                 View all →
               </a>
             </div>
@@ -183,11 +183,12 @@ export default async function DashboardPage() {
                 >
                   <div className="flex items-center gap-3">
                     <div
-                      className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-xs font-semibold ${
+                      className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-xs font-semibold"
+                      style={
                         item.objectType === "Account"
-                          ? "bg-blue-50 text-blue-600"
-                          : "bg-emerald-50 text-emerald-600"
-                      }`}
+                          ? { background: "#eff6ff", color: "#2563eb" }
+                          : { background: "color-mix(in srgb, var(--color-secondary) 12%, white)", color: "var(--color-secondary)" }
+                      }
                     >
                       {item.objectType === "Account" ? "A" : "O"}
                     </div>

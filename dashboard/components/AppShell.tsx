@@ -8,9 +8,12 @@ interface AppShellProps {
   children: React.ReactNode;
   displayName?: string;
   instanceUrl?: string;
+  appName?: string;
+  logoBase64?: string | null;
+  sidebarStyle?: "dark" | "light";
 }
 
-export default function AppShell({ children, displayName, instanceUrl }: AppShellProps) {
+export default function AppShell({ children, displayName, instanceUrl, appName, logoBase64, sidebarStyle }: AppShellProps) {
   const pathname = usePathname();
   const isPublic = pathname === "/";
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -41,6 +44,9 @@ export default function AppShell({ children, displayName, instanceUrl }: AppShel
         <Sidebar
           displayName={displayName}
           instanceUrl={instanceUrl}
+          appName={appName}
+          logoBase64={logoBase64}
+          sidebarStyle={sidebarStyle}
           onClose={() => setSidebarOpen(false)}
         />
       </div>
@@ -58,7 +64,7 @@ export default function AppShell({ children, displayName, instanceUrl }: AppShel
               <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
             </svg>
           </button>
-          <span className="text-sm font-semibold text-gray-900">SF Dashboard</span>
+          <span className="text-sm font-semibold text-gray-900">{appName ?? "SF Dashboard"}</span>
         </div>
 
         {/* Page content */}

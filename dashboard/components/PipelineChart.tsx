@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -10,6 +11,15 @@ import {
   Cell,
 } from "recharts";
 import type { SFPipelineStage } from "@/lib/salesforce";
+
+function useSecondaryColor(fallback = "#0D9488"): string {
+  const [color, setColor] = useState(fallback);
+  useEffect(() => {
+    const v = getComputedStyle(document.documentElement).getPropertyValue("--color-secondary").trim();
+    if (v) setColor(v);
+  }, []);
+  return color;
+}
 
 function formatAxisAmount(value: number): string {
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
@@ -25,16 +35,8 @@ function formatTooltipAmount(value: number): string {
   }).format(value);
 }
 
-// Blue gradient shades for bars
-const BAR_COLORS = [
-  "#93c5fd",
-  "#60a5fa",
-  "#3b82f6",
-  "#2563eb",
-  "#1d4ed8",
-  "#1e40af",
-  "#1e3a8a",
-];
+// Opacity steps for bar gradient — applied against --color-secondary at runtime
+const BAR_OPACITIES = [0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 1.0];
 
 interface TooltipPayloadItem {
   value: number;
@@ -62,6 +64,8 @@ function CustomTooltip({
 }
 
 export default function PipelineChart({ stages }: { stages: SFPipelineStage[] }) {
+  const secondaryColor = useSecondaryColor();
+
   const data = stages.map((s) => ({
     name: s.StageName,
     amount: s.totalAmt ?? 0,
@@ -101,7 +105,8 @@ export default function PipelineChart({ stages }: { stages: SFPipelineStage[] })
           {data.map((_, i) => (
             <Cell
               key={i}
-              fill={BAR_COLORS[Math.min(i, BAR_COLORS.length - 1)]}
+              fill={secondaryColor}
+              fillOpacity={BAR_OPACITIES[Math.min(i, BAR_OPACITIES.length - 1)]}
             />
           ))}
         </Bar>
