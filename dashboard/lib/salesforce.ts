@@ -302,3 +302,46 @@ export async function getWinLossStats(
     avgDealSize: wonRow?.avgAmt ?? null,
   };
 }
+
+export interface SFFinancialAccount {
+  Id: string;
+  Name: string;
+  FinServ__FinancialAccountNumber__c: string | null;
+  FinServ__FinancialAccountType__c: string | null;
+  FinServ__Status__c: string | null;
+  FinServ__Balance__c: number | null;
+  FinServ__InterestRate__c: number | null;
+  FinServ__APY__c: number | null;
+  FinServ__OpenDate__c: string | null;
+  FinServ__LoanAmount__c: number | null;
+  FinServ__PrincipalBalance__c: number | null;
+  FinServ__PaymentAmount__c: number | null;
+  FinServ__PaymentDueDate__c: string | null;
+  FinServ__Nickname__c: string | null;
+  FinServ__HoldingCount__c: number | null;
+  RecordType: { Name: string } | null;
+}
+
+export async function getFinancialAccounts(
+  instanceUrl: string,
+  accessToken: string,
+  accountId: string
+): Promise<SFFinancialAccount[]> {
+  const safe = accountId.replace(/'/g, "\\'");
+  try {
+    return await sfQuery<SFFinancialAccount>(
+      instanceUrl,
+      accessToken,
+      `SELECT Id, Name, FinServ__FinancialAccountNumber__c, FinServ__FinancialAccountType__c,
+              FinServ__Status__c, FinServ__Balance__c, FinServ__InterestRate__c, FinServ__APY__c,
+              FinServ__OpenDate__c, FinServ__LoanAmount__c, FinServ__PrincipalBalance__c,
+              FinServ__PaymentAmount__c, FinServ__PaymentDueDate__c, FinServ__Nickname__c,
+              FinServ__HoldingCount__c, RecordType.Name
+       FROM FinServ__FinancialAccount__c
+       WHERE FinServ__PrimaryOwner__c = '${safe}'
+       ORDER BY FinServ__Balance__c DESC NULLS LAST`
+    );
+  } catch {
+    return [];
+  }
+}
