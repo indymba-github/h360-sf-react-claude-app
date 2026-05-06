@@ -380,32 +380,40 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
               </div>
 
               {/* Colors */}
-              {extracted.colors.all.length > 0 && (
-                <div>
-                  <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-2">Colors found ({extracted.colors.all.length})</p>
-                  <div className="flex flex-wrap gap-2">
-                    {extracted.colors.all.map((c, i) => (
-                      <ColorSwatch
-                        key={c}
-                        color={c}
-                        label={i === 0 ? "primary" : i === 1 ? "secondary" : i === 2 ? "accent" : undefined}
-                        onSetPrimary={setPrimary}
-                        onSetSecondary={setSecondary}
-                        onSetAccent={setAccent}
-                      />
-                    ))}
-                  </div>
-                  <p className="text-[10px] text-gray-400 mt-1.5">Click a swatch to assign it as primary, secondary, or accent.</p>
-                  <div className="flex gap-2 mt-2">
-                    {extracted.colors.primary && (
-                      <button onClick={() => setPrimary(extracted.colors.primary!)} className="text-[10px] px-2 py-0.5 border border-gray-200 rounded text-gray-600 hover:bg-white transition-colors">Use suggested primary</button>
-                    )}
-                    {extracted.colors.secondary && (
-                      <button onClick={() => setSecondary(extracted.colors.secondary!)} className="text-[10px] px-2 py-0.5 border border-gray-200 rounded text-gray-600 hover:bg-white transition-colors">Use suggested secondary</button>
-                    )}
-                  </div>
-                </div>
-              )}
+              <div>
+                <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-2">
+                  Colors found ({extracted.colors.all.length})
+                </p>
+                {extracted.colors.all.length > 0 ? (
+                  <>
+                    <div className="flex flex-wrap gap-2">
+                      {extracted.colors.all.map((c, i) => (
+                        <ColorSwatch
+                          key={c}
+                          color={c}
+                          label={i === 0 ? "primary" : i === 1 ? "secondary" : i === 2 ? "accent" : undefined}
+                          onSetPrimary={setPrimary}
+                          onSetSecondary={setSecondary}
+                          onSetAccent={setAccent}
+                        />
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-1.5">Click a swatch to assign it as primary, secondary, or accent.</p>
+                    <div className="flex gap-2 mt-2">
+                      {extracted.colors.primary && (
+                        <button onClick={() => setPrimary(extracted.colors.primary!)} className="text-[10px] px-2 py-0.5 border border-gray-200 rounded text-gray-600 hover:bg-white transition-colors">Use suggested primary</button>
+                      )}
+                      {extracted.colors.secondary && (
+                        <button onClick={() => setSecondary(extracted.colors.secondary!)} className="text-[10px] px-2 py-0.5 border border-gray-200 rounded text-gray-600 hover:bg-white transition-colors">Use suggested secondary</button>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                    No brand colors detected. Please enter manually in the Colors section below.
+                  </p>
+                )}
+              </div>
 
               {/* Fonts */}
               {(extracted.fonts.heading || extracted.fonts.body) && (

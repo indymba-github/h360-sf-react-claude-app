@@ -33,7 +33,6 @@ function resolveUrl(base: string, href: string): string | null {
   }
 }
 
-/** Fetch with a timeout, returning null on error. */
 async function safeFetch(url: string, timeoutMs: number): Promise<Response | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -62,77 +61,209 @@ async function fetchBase64(url: string, timeoutMs = 8000): Promise<string | null
   if (!res) return null;
   try {
     const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length === 0 || buf.length > 512 * 1024) return null;  // skip empty or >512KB
-    const ct = res.headers.get("content-type") ?? "image/png";
+    if (buf.length === 0 || buf.length > 512 * 1024) return null;
+    const ct = res.headers.get("content-type") ?? "";
     const mimeType = ct.split(";")[0].trim();
-    // Only accept image types
     if (!mimeType.startsWith("image/")) return null;
     return `data:${mimeType};base64,${buf.toString("base64")}`;
   } catch { return null; }
 }
 
-// ── Color extraction ───────────────────────────────────────────────────────────
+// ── Color utilities ───────────────────────────────────────────────────────────
 
-const HEX6_RE = /#([0-9a-fA-F]{6})\b/g;
-const HEX3_RE = /#([0-9a-fA-F]{3})\b/g;
-const RGB_RE  = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/g;
-
-function hex3to6(h3: string): string {
-  return `#${h3[0]}${h3[0]}${h3[1]}${h3[1]}${h3[2]}${h3[2]}`;
+function hexToRgb(hex: string): [number, number, number] {
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
 }
 
 function rgbToHex(r: number, g: number, b: number): string {
   return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
 }
 
-/** True if the color is essentially white, black, or a gray. */
-function isNeutral(hex: string): boolean {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const lightness = (max + min) / 2 / 255;
-  const saturation = max === min ? 0 : (max - min) / (255 - Math.abs(2 * (max + min) / 2 - 255));
-  // Very dark, very light, or very desaturated
-  return lightness < 0.08 || lightness > 0.92 || saturation < 0.08;
+/** Normalize any hex (3, 6, or 8 digit) to lowercase 6-digit. Returns null if invalid. */
+function normalizeHex(raw: string): string | null {
+  const s = raw.trim().toLowerCase();
+  if (s[0] !== "#") return null;
+  if (s.length === 4) return `#${s[1]}${s[1]}${s[2]}${s[2]}${s[3]}${s[3]}`;
+  if (s.length === 7) return s;
+  if (s.length === 9) return s.slice(0, 7); // 8-digit: strip alpha
+  return null;
 }
 
-function extractColorsFromCss(css: string): string[] {
+function hslToHex(h: number, s: number, l: number): string {
+  const sn = s / 100, ln = l / 100;
+  const a = sn * Math.min(ln, 1 - ln);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = ln - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color).toString(16).padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+/** True for near-white (all channels > 230), near-black (all < 40), or near-gray (max spread < 20). */
+function isNeutral(hex: string): boolean {
+  const [r, g, b] = hexToRgb(hex);
+  if (r > 230 && g > 230 && b > 230) return true;
+  if (r < 40 && g < 40 && b < 40) return true;
+  if (Math.max(r, g, b) - Math.min(r, g, b) < 20) return true;
+  return false;
+}
+
+function rgbDistance(hex1: string, hex2: string): number {
+  const [r1, g1, b1] = hexToRgb(hex1);
+  const [r2, g2, b2] = hexToRgb(hex2);
+  return Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2);
+}
+
+function hexToHue(hex: string): number {
+  const [r, g, b] = hexToRgb(hex);
+  const rn = r / 255, gn = g / 255, bn = b / 255;
+  const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn);
+  if (max === min) return 0;
+  const d = max - min;
+  let h: number;
+  if (max === rn) h = ((gn - bn) / d) % 6;
+  else if (max === gn) h = (bn - rn) / d + 2;
+  else h = (rn - gn) / d + 4;
+  return ((h * 60) + 360) % 360;
+}
+
+// ── Color extraction from text ────────────────────────────────────────────────
+
+const HEX_RE = /#([0-9a-fA-F]{3,8})\b/g;
+const RGB_RE = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/g;
+const HSL_RE = /hsla?\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%/g;
+
+function extractColorsFromText(text: string): Map<string, number> {
   const freq = new Map<string, number>();
 
-  const addColor = (hex: string) => {
-    if (!isNeutral(hex)) {
-      const normalized = hex.toLowerCase();
-      freq.set(normalized, (freq.get(normalized) ?? 0) + 1);
-    }
+  const add = (hex: string) => {
+    const norm = normalizeHex(hex);
+    if (!norm || isNeutral(norm)) return;
+    freq.set(norm, (freq.get(norm) ?? 0) + 1);
   };
 
-  // hex 6-digit
-  for (const m of css.matchAll(HEX6_RE)) addColor(`#${m[1]}`);
-  // hex 3-digit
-  for (const m of css.matchAll(HEX3_RE)) addColor(hex3to6(m[1]));
-  // rgb/rgba
-  for (const m of css.matchAll(RGB_RE)) addColor(rgbToHex(+m[1], +m[2], +m[3]));
+  for (const m of [...text.matchAll(HEX_RE)]) {
+    if (m[1].length === 3 || m[1].length === 6 || m[1].length === 8) add(`#${m[1]}`);
+  }
+  for (const m of [...text.matchAll(RGB_RE)]) add(rgbToHex(+m[1], +m[2], +m[3]));
+  for (const m of [...text.matchAll(HSL_RE)]) add(hslToHex(+m[1], +m[2], +m[3]));
 
-  return Array.from(freq.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([hex]) => hex);
+  return freq;
 }
 
-/** Extract CSS custom property value: --primary-color, --brand-color, --color-primary, etc. */
+function addFreqMap(target: Map<string, number>, source: Map<string, number>) {
+  source.forEach((count, hex) => {
+    target.set(hex, (target.get(hex) ?? 0) + count);
+  });
+}
+
+/**
+ * Groups colors within RGB distance 30 and returns the most-frequent
+ * representative from each group, sorted by group total frequency.
+ */
+function groupAndRankColors(freq: Map<string, number>): string[] {
+  const entries: [string, number][] = [];
+  freq.forEach((count, hex) => entries.push([hex, count]));
+  entries.sort((a, b) => b[1] - a[1]);
+
+  const groups: Array<{ rep: string; totalFreq: number }> = [];
+  for (const [hex, count] of entries) {
+    let placed = false;
+    for (const g of groups) {
+      if (rgbDistance(hex, g.rep) < 30) { g.totalFreq += count; placed = true; break; }
+    }
+    if (!placed) groups.push({ rep: hex, totalFreq: count });
+  }
+
+  return groups.sort((a, b) => b.totalFreq - a.totalFreq).slice(0, 8).map(g => g.rep);
+}
+
+function pickDistinctColors(colors: string[], themeColor: string | null): {
+  primary: string | null; secondary: string | null; accent: string | null;
+} {
+  const ranked = themeColor && !isNeutral(themeColor)
+    ? [themeColor, ...colors.filter(c => c !== themeColor)]
+    : colors;
+
+  const primary = ranked[0] ?? null;
+  if (!primary) return { primary: null, secondary: null, accent: null };
+
+  const primaryHue = hexToHue(primary);
+  const secondary = ranked.slice(1).find(c => Math.min(Math.abs(hexToHue(c) - primaryHue), 360 - Math.abs(hexToHue(c) - primaryHue)) > 30)
+    ?? ranked[1] ?? null;
+  const secondaryHue = secondary ? hexToHue(secondary) : -999;
+  const accent = ranked.slice(1).find(c => {
+    if (c === secondary) return false;
+    const hue = hexToHue(c);
+    return Math.min(Math.abs(hue - primaryHue), 360 - Math.abs(hue - primaryHue)) > 30
+      && Math.min(Math.abs(hue - secondaryHue), 360 - Math.abs(hue - secondaryHue)) > 30;
+  }) ?? ranked.find(c => c !== primary && c !== secondary) ?? null;
+
+  return { primary, secondary, accent };
+}
+
+// ── Source-specific extractors ────────────────────────────────────────────────
+
+function extractMetaThemeColor(html: string): string | null {
+  const raw = html.match(/<meta[^>]+name=["']theme-color["'][^>]+content=["']([^"']+)["']/i)?.[1]
+    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']theme-color["']/i)?.[1];
+  if (!raw) return null;
+  const hex = normalizeHex(raw.trim());
+  if (hex) return hex;
+  const rgb = raw.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  return rgb ? rgbToHex(+rgb[1], +rgb[2], +rgb[3]) : null;
+}
+
+function extractInlineStyleColors(html: string): Map<string, number> {
+  const freq = new Map<string, number>();
+  for (const m of [...html.matchAll(/\bstyle=["']([^"']+)["']/gi)]) {
+    if (!/color|background|border/i.test(m[1])) continue;
+    addFreqMap(freq, extractColorsFromText(m[1]));
+  }
+  return freq;
+}
+
+function extractSvgColors(svgText: string): Map<string, number> {
+  const freq = new Map<string, number>();
+  for (const m of [...svgText.matchAll(/(?:fill|stroke)=["']([^"']+)["']/gi)]) {
+    const val = m[1].trim();
+    if (val === "none" || val === "currentColor" || val === "inherit") continue;
+    addFreqMap(freq, extractColorsFromText(val));
+  }
+  addFreqMap(freq, extractColorsFromText(svgText));
+  return freq;
+}
+
+function extractStylesheetUrls(html: string, baseUrl: string): string[] {
+  const urls: string[] = [];
+  for (const m of [...html.matchAll(/<link[^>]+>/gi)]) {
+    const tag = m[0];
+    const rel = tag.match(/rel=["']([^"']+)["']/i)?.[1]?.toLowerCase() ?? "";
+    if (!rel.includes("stylesheet")) continue;
+    const href = tag.match(/href=["']([^"']+)["']/i)?.[1];
+    if (!href) continue;
+    const resolved = resolveUrl(baseUrl, href);
+    if (resolved) urls.push(resolved);
+  }
+  return urls.slice(0, 3);
+}
+
 function extractCssVarColor(css: string): string | null {
   const varNames = [
     "--primary-color", "--brand-color", "--color-primary", "--brand-primary",
     "--main-color", "--theme-color", "--accent-color", "--color-brand",
   ];
   for (const v of varNames) {
-    const re = new RegExp(`${v.replace(/--/, "--")}\\s*:\\s*(#[0-9a-fA-F]{3,6}|rgb[^;)]+)`, "i");
+    const re = new RegExp(`${v}\\s*:\\s*(#[0-9a-fA-F]{3,6}|rgb[^;)]+)`, "i");
     const m = css.match(re);
     if (m) {
       const raw = m[1].trim();
-      if (raw.startsWith("#")) return raw.length === 4 ? hex3to6(raw.slice(1)) : raw;
+      if (raw.startsWith("#")) return normalizeHex(raw);
     }
   }
   return null;
@@ -146,22 +277,19 @@ const HEADING_TAGS = ["h1", "h2", "h3", "h4"];
 
 function extractFonts(css: string, html: string): BrandFonts {
   const googleImports = [...css.matchAll(GOOGLE_FONT_RE)].map(m => m[0]);
-  // Also check HTML link tags
   const linkHrefs = [...html.matchAll(/href=["']([^"']+fonts\.googleapis\.com[^"']+)["']/gi)].map(m => m[1]);
   const allImports = [...new Set([...googleImports, ...linkHrefs])];
 
-  // Extract font names from Google Fonts URLs
   function fontNameFromUrl(url: string): string | null {
     const m = url.match(/family=([^&:+|]+)/);
     if (!m) return null;
     return decodeURIComponent(m[1]).replace(/\+/g, " ").split("|")[0].split(":")[0].trim();
   }
 
-  // Extract heading font from CSS rules for h1–h4
   let headingFont: string | null = null;
   for (const tag of HEADING_TAGS) {
     const blockRe = new RegExp(`${tag}\\s*\\{([^}]+)\\}`, "gi");
-    for (const bm of css.matchAll(blockRe)) {
+    for (const bm of [...css.matchAll(blockRe)]) {
       const ffm = bm[1].match(FONT_FAMILY_RE);
       if (ffm) {
         headingFont = ffm[0].replace(/font-family\s*:\s*/i, "").replace(/['"]/g, "").split(",")[0].trim();
@@ -171,10 +299,9 @@ function extractFonts(css: string, html: string): BrandFonts {
     if (headingFont) break;
   }
 
-  // Extract body font from body / :root rule
   const bodyBlockRe = /(?:body|:root)\s*\{([^}]+)\}/gi;
   let bodyFont: string | null = null;
-  for (const bm of css.matchAll(bodyBlockRe)) {
+  for (const bm of [...css.matchAll(bodyBlockRe)]) {
     const ffm = bm[1].match(FONT_FAMILY_RE);
     if (ffm) {
       bodyFont = ffm[0].replace(/font-family\s*:\s*/i, "").replace(/['"]/g, "").split(",")[0].trim();
@@ -182,12 +309,10 @@ function extractFonts(css: string, html: string): BrandFonts {
     }
   }
 
-  // Fall back to Google Fonts names
   if (!headingFont && allImports.length > 0) headingFont = fontNameFromUrl(allImports[0]);
   if (!bodyFont && allImports.length > 1) bodyFont = fontNameFromUrl(allImports[1]);
   if (!bodyFont && allImports.length > 0) bodyFont = headingFont;
 
-  // Match import URLs to font names
   const headingImportUrl = headingFont
     ? allImports.find(u => u.toLowerCase().includes(headingFont!.toLowerCase().replace(/ /g, "+"))) ?? allImports[0] ?? null
     : null;
@@ -195,12 +320,7 @@ function extractFonts(css: string, html: string): BrandFonts {
     ? allImports.find(u => u.toLowerCase().includes(bodyFont!.toLowerCase().replace(/ /g, "+"))) ?? null
     : null;
 
-  return {
-    heading: headingFont,
-    body: bodyFont,
-    headingImportUrl,
-    bodyImportUrl,
-  };
+  return { heading: headingFont, body: bodyFont, headingImportUrl, bodyImportUrl };
 }
 
 // ── Logo extraction ────────────────────────────────────────────────────────────
@@ -213,10 +333,9 @@ function extractLogoUrls(html: string, baseUrl: string): string[] {
     if (resolved) candidates.push({ url: resolved, score });
   };
 
-  // SVG favicon (highest priority)
-  for (const m of html.matchAll(/<link[^>]+>/gi)) {
+  for (const m of [...html.matchAll(/<link[^>]+>/gi)]) {
     const tag = m[0];
-    const rel = tag.match(/rel=["']([^"']+)["']/i)?.[1]?.toLowerCase() ?? "";
+    const rel  = tag.match(/rel=["']([^"']+)["']/i)?.[1]?.toLowerCase() ?? "";
     const type = tag.match(/type=["']([^"']+)["']/i)?.[1]?.toLowerCase() ?? "";
     const href = tag.match(/href=["']([^"']+)["']/i)?.[1] ?? null;
     if (rel.includes("icon") && type === "image/svg+xml") add(href, 100);
@@ -224,40 +343,35 @@ function extractLogoUrls(html: string, baseUrl: string): string[] {
     else if (rel === "apple-touch-icon") add(href, 40);
   }
 
-  // og:image
   const ogImage = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1]
     ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)?.[1];
   if (ogImage) add(ogImage, 70);
 
-  // <img> with logo in class/id/alt/src
-  for (const m of html.matchAll(/<img[^>]+>/gi)) {
+  for (const m of [...html.matchAll(/<img[^>]+>/gi)]) {
     const tag = m[0];
     const src = tag.match(/src=["']([^"']+)["']/i)?.[1] ?? null;
     const cls = tag.match(/class=["']([^"']+)["']/i)?.[1] ?? "";
     const id  = tag.match(/id=["']([^"']+)["']/i)?.[1] ?? "";
     const alt = tag.match(/alt=["']([^"']+)["']/i)?.[1] ?? "";
-    const isLogo = [cls, id, alt, src ?? ""].some(s => /logo/i.test(s));
-    if (isLogo && src) add(src, 60);
+    if ([cls, id, alt, src ?? ""].some(s => /logo/i.test(s)) && src) add(src, 60);
   }
 
-  // Fallback: /favicon.ico
   try {
     const origin = new URL(baseUrl).origin;
     candidates.push({ url: `${origin}/favicon.ico`, score: 10 });
   } catch {}
 
-  // Sort by score desc, deduplicate
   const seen = new Set<string>();
   return candidates
     .sort((a, b) => b.score - a.score)
-    .filter(c => { const key = c.url; if (seen.has(key)) return false; seen.add(key); return true; })
+    .filter(c => { if (seen.has(c.url)) return false; seen.add(c.url); return true; })
     .map(c => c.url);
 }
 
 // ── Company name extraction ────────────────────────────────────────────────────
 
 const NOISE_SUFFIXES = [
-  /\s*[|–—-]\s*.+$/, // "Acme | Home", "Acme - Official Site"
+  /\s*[|–—-]\s*.+$/,
   /\s*::\s*.+$/,
   /\s*·\s*.+$/,
   /\s*official\s+(?:site|website|homepage)/i,
@@ -289,7 +403,6 @@ function extractCompanyName(html: string): string | null {
 // ── Main extraction ────────────────────────────────────────────────────────────
 
 export async function extractBrand(inputUrl: string): Promise<BrandResult> {
-  // Normalise URL
   let baseUrl: string;
   try {
     const u = new URL(inputUrl.startsWith("http") ? inputUrl : `https://${inputUrl}`);
@@ -301,61 +414,98 @@ export async function extractBrand(inputUrl: string): Promise<BrandResult> {
   const html = await fetchText(baseUrl, 10_000);
   if (!html) throw new Error("Could not fetch the URL. Check it is publicly accessible.");
 
-  // ── Company name ────────────────────────────────────────────────────────────
   const companyName = extractCompanyName(html);
 
-  // ── Collect CSS ─────────────────────────────────────────────────────────────
-  const cssChunks: string[] = [];
+  // Meta theme-color is the most explicit brand signal
+  const themeColor = extractMetaThemeColor(html);
+  console.log("Meta theme-color:", themeColor);
 
-  // Inline <style> blocks
-  for (const m of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)) {
-    cssChunks.push(m[1]);
+  // Style tags
+  const styleTagTexts: string[] = [];
+  for (const m of [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)]) {
+    styleTagTexts.push(m[1]);
   }
+  const styleTagCss = styleTagTexts.join("\n");
+  const styleColors = extractColorsFromText(styleTagCss);
+  console.log("Colors from style tags:", styleColors.size);
 
-  // Linked stylesheets (up to 3 to stay fast)
-  const sheetHrefs = [...html.matchAll(/<link[^>]+rel=["']stylesheet["'][^>]*href=["']([^"']+)["']/gi)]
-    .map(m => resolveUrl(baseUrl, m[1]))
-    .filter((u): u is string => u !== null)
-    .slice(0, 3);
+  // Linked stylesheets (up to 3)
+  const sheetUrls = extractStylesheetUrls(html, baseUrl);
+  const sheetTexts = (await Promise.all(sheetUrls.map(u => fetchText(u, 6_000)))).filter((t): t is string => t !== null);
+  const sheetCss = sheetTexts.join("\n");
+  const sheetColors = extractColorsFromText(sheetCss);
+  console.log("Colors from stylesheets:", sheetColors.size);
 
-  await Promise.all(sheetHrefs.map(async (href) => {
-    const css = await fetchText(href, 6_000);
-    if (css) cssChunks.push(css);
-  }));
+  // Inline style attributes
+  const inlineColors = extractInlineStyleColors(html);
+  console.log("Colors from inline styles:", inlineColors.size);
 
-  const fullCss = cssChunks.join("\n");
-
-  // ── Colors ──────────────────────────────────────────────────────────────────
-  const cssVarColor = extractCssVarColor(fullCss);
-  const freqColors  = extractColorsFromCss(fullCss);
-
-  const primary   = cssVarColor ?? freqColors[0] ?? null;
-  const secondary = freqColors.find(c => c !== primary) ?? freqColors[1] ?? null;
-  const accent    = freqColors.find(c => c !== primary && c !== secondary) ?? freqColors[2] ?? null;
-  const allColors = [...new Set([primary, secondary, accent, ...freqColors].filter((c): c is string => c !== null))].slice(0, 8);
-
-  // ── Fonts ───────────────────────────────────────────────────────────────────
+  // Fonts (needs combined CSS)
+  const fullCss = [styleTagCss, sheetCss].join("\n");
   const fonts = extractFonts(fullCss, html);
 
-  // ── Logo ────────────────────────────────────────────────────────────────────
+  // Logo + SVG color extraction
   const logoUrls = extractLogoUrls(html, baseUrl);
   let logo: string | null = null;
   let logoUrl: string | null = null;
+  let svgColors = new Map<string, number>();
 
   for (const url of logoUrls) {
+    if (/\.svg($|\?)/i.test(url) || url.includes("svg")) {
+      const svgText = await fetchText(url, 6_000);
+      if (svgText && /<svg/i.test(svgText)) {
+        svgColors = extractSvgColors(svgText);
+        logo = `data:image/svg+xml;base64,${Buffer.from(svgText).toString("base64")}`;
+        logoUrl = url;
+        break;
+      }
+    }
     const b64 = await fetchBase64(url, 6_000);
     if (b64) {
       logo = b64;
       logoUrl = url;
+      if (b64.startsWith("data:image/svg+xml;base64,")) {
+        try {
+          const svgText = Buffer.from(b64.split(",")[1], "base64").toString("utf-8");
+          svgColors = extractSvgColors(svgText);
+        } catch {}
+      }
       break;
     }
   }
+
+  // Merge all color sources
+  const allFreq = new Map<string, number>();
+  addFreqMap(allFreq, styleColors);
+  addFreqMap(allFreq, sheetColors);
+  addFreqMap(allFreq, inlineColors);
+  addFreqMap(allFreq, svgColors);
+
+  // Boost CSS variable colors — they're intentionally set
+  const cssVarColor = extractCssVarColor(fullCss);
+  if (cssVarColor) {
+    const norm = normalizeHex(cssVarColor);
+    if (norm && !isNeutral(norm)) allFreq.set(norm, (allFreq.get(norm) ?? 0) + 10);
+  }
+
+  // Heavy boost for theme-color — most explicit brand signal
+  if (themeColor && !isNeutral(themeColor)) {
+    allFreq.set(themeColor, (allFreq.get(themeColor) ?? 0) + 20);
+  }
+
+  console.log("All colors found:", allFreq.size);
+
+  const ranked = groupAndRankColors(allFreq);
+  const brandColors = ranked.slice(0, 5);
+  console.log("Filtered brand colors:", brandColors);
+
+  const { primary, secondary, accent } = pickDistinctColors(brandColors, themeColor);
 
   return {
     companyName,
     logo,
     logoUrl,
-    colors: { primary, secondary, accent, all: allColors },
+    colors: { primary, secondary, accent, all: brandColors },
     fonts,
   };
 }
