@@ -1,10 +1,19 @@
 // Server-side only — uses Node fetch + Buffer
+import Anthropic from "@anthropic-ai/sdk";
+
+export type ColorSource = "css" | "ai";
+
+export interface TaggedColor {
+  hex: string;
+  source: ColorSource;
+}
 
 export interface BrandColors {
   primary: string | null;
   secondary: string | null;
   accent: string | null;
   all: string[];
+  tagged: TaggedColor[];
 }
 
 export interface BrandFonts {
@@ -20,6 +29,7 @@ export interface BrandResult {
   logoUrl: string | null;       // original URL for display
   colors: BrandColors;
   fonts: BrandFonts;
+  aiAnalyzed: boolean;
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -400,6 +410,124 @@ function extractCompanyName(html: string): string | null {
   return null;
 }
 
+// ── AI-based brand analysis ───────────────────────────────────────────────────
+
+interface AiAnalysisResult {
+  primary: string | null;
+  secondary: string | null;
+  additional: string[];
+  headingFont: string | null;
+  bodyFont: string | null;
+}
+
+async function analyzeWithAI(logoBase64: string | null, html: string): Promise<AiAnalysisResult | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+
+  const anthropic = new Anthropic({ apiKey });
+
+  const jsonInstruction = `Respond ONLY with JSON, no markdown, no backticks:
+{
+  "primary": "#hex or null",
+  "secondary": "#hex or null",
+  "additional": ["#hex"],
+  "headingFont": "Font Name or null",
+  "bodyFont": "Font Name or null"
+}`;
+
+  const htmlSnippet = html.slice(0, logoBase64 ? 5000 : 8000);
+
+  let content: Anthropic.MessageParam["content"];
+
+  if (logoBase64 && logoBase64.startsWith("data:image/")) {
+    // Extract media type and base64 data
+    const mediaMatch = logoBase64.match(/^data:(image\/[^;]+);base64,(.+)$/);
+    if (!mediaMatch) return null;
+    const mediaType = mediaMatch[1] as "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+    // Claude vision only supports png/jpeg/gif/webp — skip svg
+    const supported = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+    if (!supported.includes(mediaType)) {
+      // Fall back to text-only with SVG excluded
+      content = [{
+        type: "text",
+        text: `Analyze this website HTML and extract brand colors. Look at inline styles, CSS color values, meta theme-color tags, and color class names. Also identify font-family declarations.\n\n${jsonInstruction}\n\nHTML:\n${htmlSnippet}`,
+      }];
+    } else {
+      content = [
+        {
+          type: "image",
+          source: { type: "base64", media_type: mediaType, data: mediaMatch[2] },
+        },
+        {
+          type: "text",
+          text: `Analyze this company logo and the following HTML from their website. Extract the brand identity:\n\n1. PRIMARY COLOR: The single most dominant brand color (hex code). Look at the logo colors, header backgrounds, and primary buttons.\n2. SECONDARY COLOR: The second brand color (hex code). Look at accents, links, and secondary elements.\n3. ADDITIONAL COLORS: Up to 3 more brand colors (hex codes).\n4. HEADING FONT: The font used for headings (name only, or null if unclear).\n5. BODY FONT: The font used for body text (name only, or null if unclear).\n\n${jsonInstruction}\n\nPage HTML (first ${htmlSnippet.length} chars):\n${htmlSnippet}`,
+        },
+      ];
+    }
+  } else {
+    content = [{
+      type: "text",
+      text: `Analyze this website HTML and extract brand colors. Look at inline styles, CSS color values, meta theme-color tags, background-color declarations, and any color values in style attributes.\n\n${jsonInstruction}\n\nHTML:\n${htmlSnippet}`,
+    }];
+  }
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    let response: Anthropic.Message;
+    try {
+      response = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 256,
+        messages: [{ role: "user", content }],
+      }, { signal: controller.signal as RequestInit["signal"] });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const text = response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
+    console.log("AI brand analysis response:", text.slice(0, 200));
+
+    // Try to parse JSON directly
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      // Claude sometimes wraps in markdown — strip it
+      const stripped = text.replace(/```[a-z]*\n?/gi, "").trim();
+      try {
+        parsed = JSON.parse(stripped) as Record<string, unknown>;
+      } catch {
+        // Last resort: pull hex codes out with regex
+        const hexes = [...stripped.matchAll(/"#([0-9a-fA-F]{6})"/g)].map(m => `#${m[1]}`);
+        if (hexes.length === 0) return null;
+        return { primary: hexes[0] ?? null, secondary: hexes[1] ?? null, additional: hexes.slice(2, 5), headingFont: null, bodyFont: null };
+      }
+    }
+
+    const toHex = (v: unknown): string | null => {
+      if (typeof v !== "string") return null;
+      const n = normalizeHex(v.trim());
+      return n && !isNeutral(n) ? n : null;
+    };
+
+    const additional: string[] = (Array.isArray(parsed.additional) ? parsed.additional : [])
+      .map(toHex)
+      .filter((h): h is string => h !== null);
+
+    return {
+      primary: toHex(parsed.primary),
+      secondary: toHex(parsed.secondary),
+      additional,
+      headingFont: typeof parsed.headingFont === "string" && parsed.headingFont !== "null" ? parsed.headingFont : null,
+      bodyFont: typeof parsed.bodyFont === "string" && parsed.bodyFont !== "null" ? parsed.bodyFont : null,
+    };
+  } catch (err) {
+    console.warn("AI brand analysis failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 // ── Main extraction ────────────────────────────────────────────────────────────
 
 export async function extractBrand(inputUrl: string): Promise<BrandResult> {
@@ -496,16 +624,57 @@ export async function extractBrand(inputUrl: string): Promise<BrandResult> {
   console.log("All colors found:", allFreq.size);
 
   const ranked = groupAndRankColors(allFreq);
-  const brandColors = ranked.slice(0, 5);
-  console.log("Filtered brand colors:", brandColors);
+  const cssColors = ranked.slice(0, 5);
+  console.log("Filtered brand colors (CSS):", cssColors);
 
-  const { primary, secondary, accent } = pickDistinctColors(brandColors, themeColor);
+  // ── AI analysis (always runs to supplement CSS, but CSS vars/theme-color take priority) ──
+  const aiResult = await analyzeWithAI(logo, html);
+  let aiAnalyzed = false;
+
+  // Build tagged color list: CSS colors first, then AI-only colors
+  const taggedColors: TaggedColor[] = cssColors.map(hex => ({ hex, source: "css" as ColorSource }));
+
+  if (aiResult) {
+    aiAnalyzed = true;
+    console.log("AI analysis result:", aiResult);
+    const aiHexes = [
+      aiResult.primary,
+      aiResult.secondary,
+      ...aiResult.additional,
+    ].filter((h): h is string => h !== null);
+
+    for (const hex of aiHexes) {
+      // Add AI color if not already close to an existing CSS color
+      const alreadyCovered = taggedColors.some(t => rgbDistance(t.hex, hex) < 30);
+      if (!alreadyCovered) taggedColors.push({ hex, source: "ai" });
+    }
+
+    // Fill fonts from AI if CSS didn't find them
+    if (!fonts.heading && aiResult.headingFont) fonts.heading = aiResult.headingFont;
+    if (!fonts.body && aiResult.bodyFont) fonts.body = aiResult.bodyFont;
+
+    // If CSS found no colors, boost AI primary/secondary into the allFreq so
+    // pickDistinctColors can use them
+    if (cssColors.length === 0) {
+      if (aiResult.primary) allFreq.set(aiResult.primary, 15);
+      if (aiResult.secondary) allFreq.set(aiResult.secondary, 10);
+      for (const h of aiResult.additional) allFreq.set(h, 5);
+    }
+  }
+
+  const allColors = taggedColors.slice(0, 8).map(t => t.hex);
+  const finalFreq = allFreq.size > 0 ? allFreq : new Map(allColors.map((h, i) => [h, 8 - i]));
+  const { primary, secondary, accent } = pickDistinctColors(
+    groupAndRankColors(finalFreq),
+    themeColor,
+  );
 
   return {
     companyName,
     logo,
     logoUrl,
-    colors: { primary, secondary, accent, all: brandColors },
+    colors: { primary, secondary, accent, all: allColors, tagged: taggedColors.slice(0, 8) },
     fonts,
+    aiAnalyzed,
   };
 }

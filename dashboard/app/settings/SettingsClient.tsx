@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import type { AppSettings } from "@/lib/settings";
-import type { BrandResult } from "@/lib/brand-extractor";
+import type { BrandResult, TaggedColor } from "@/lib/brand-extractor";
 
 // ── Constants / defaults ───────────────────────────────────────────────────────
 
@@ -56,12 +56,14 @@ function ColorInput({ label, value, onChange }: { label: string; value: string; 
 function ColorSwatch({
   color,
   label,
+  source,
   onSetPrimary,
   onSetSecondary,
   onSetAccent,
 }: {
   color: string;
   label?: string;
+  source?: "css" | "ai";
   onSetPrimary: (c: string) => void;
   onSetSecondary: (c: string) => void;
   onSetAccent: (c: string) => void;
@@ -70,15 +72,32 @@ function ColorSwatch({
   return (
     <div className="relative">
       <button
-        title={color}
+        title={`${color}${source ? ` (${source === "ai" ? "AI" : "CSS"})` : ""}`}
         onClick={() => setOpen(o => !o)}
         className="w-8 h-8 rounded-lg border-2 border-white shadow ring-1 ring-gray-200 hover:scale-110 transition-transform"
         style={{ background: color }}
       />
+      {/* source badge */}
+      {source && (
+        <span
+          className={`absolute -top-1 -right-1 text-[7px] font-bold px-0.5 rounded leading-tight pointer-events-none ${
+            source === "ai"
+              ? "bg-purple-500 text-white"
+              : "bg-blue-500 text-white"
+          }`}
+        >
+          {source === "ai" ? "AI" : "CSS"}
+        </span>
+      )}
       {label && <p className="text-[9px] text-center text-gray-400 mt-0.5 truncate w-8">{label}</p>}
       {open && (
         <div className="absolute top-9 left-0 z-20 bg-white border border-gray-200 rounded-lg shadow-lg p-2 text-xs whitespace-nowrap">
           <p className="font-mono text-gray-500 px-1 mb-1">{color}</p>
+          {source && (
+            <p className="px-1 mb-1 text-gray-400">
+              Source: <span className={source === "ai" ? "text-purple-500" : "text-blue-500"}>{source === "ai" ? "AI analysis" : "CSS parsing"}</span>
+            </p>
+          )}
           <button onClick={() => { onSetPrimary(color); setOpen(false); }} className="w-full text-left px-2 py-1 rounded hover:bg-gray-50">Use as Primary</button>
           <button onClick={() => { onSetSecondary(color); setOpen(false); }} className="w-full text-left px-2 py-1 rounded hover:bg-gray-50">Use as Secondary</button>
           <button onClick={() => { onSetAccent(color); setOpen(false); }} className="w-full text-left px-2 py-1 rounded hover:bg-gray-50">Use as Accent</button>
@@ -173,6 +192,7 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
   // Brand import state
   const [brandUrl, setBrandUrl]           = useState("");
   const [extracting, setExtracting]       = useState(false);
+  const [extractPhase, setExtractPhase]   = useState<"css" | "ai" | null>(null);
   const [extractError, setExtractError]   = useState<string | null>(null);
   const [extracted, setExtracted]         = useState<BrandResult | null>(null);
 
@@ -196,8 +216,13 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
     const url = brandUrl.trim();
     if (!url) return;
     setExtracting(true);
+    setExtractPhase("css");
     setExtractError(null);
     setExtracted(null);
+
+    // Advance to AI phase after ~3s (CSS parsing is fast; AI takes ~5–10s)
+    const phaseTimer = setTimeout(() => setExtractPhase("ai"), 3000);
+
     try {
       const res = await fetch("/api/settings/extract-brand", {
         method: "POST",
@@ -210,7 +235,9 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
     } catch (err) {
       setExtractError(err instanceof Error ? err.message : "Extraction failed");
     } finally {
+      clearTimeout(phaseTimer);
       setExtracting(false);
+      setExtractPhase(null);
     }
   }
 
@@ -331,7 +358,7 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  Analyzing…
+                  {extractPhase === "ai" ? "Analyzing with AI…" : "Scanning CSS…"}
                 </span>
               ) : "Extract Brand"}
             </button>
@@ -381,16 +408,25 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
 
               {/* Colors */}
               <div>
-                <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-2">
-                  Colors found ({extracted.colors.all.length})
-                </p>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">
+                    Colors found ({extracted.colors.all.length})
+                  </p>
+                  {extracted.aiAnalyzed && (
+                    <div className="flex items-center gap-2 text-[9px] text-gray-400">
+                      <span className="inline-flex items-center gap-0.5"><span className="w-2 h-2 rounded-sm bg-blue-500 inline-block" /> CSS</span>
+                      <span className="inline-flex items-center gap-0.5"><span className="w-2 h-2 rounded-sm bg-purple-500 inline-block" /> AI</span>
+                    </div>
+                  )}
+                </div>
                 {extracted.colors.all.length > 0 ? (
                   <>
-                    <div className="flex flex-wrap gap-2">
-                      {extracted.colors.all.map((c, i) => (
+                    <div className="flex flex-wrap gap-3">
+                      {(extracted.colors.tagged ?? extracted.colors.all.map(h => ({ hex: h, source: "css" as const }))).map((t: TaggedColor, i: number) => (
                         <ColorSwatch
-                          key={c}
-                          color={c}
+                          key={t.hex}
+                          color={t.hex}
+                          source={t.source}
                           label={i === 0 ? "primary" : i === 1 ? "secondary" : i === 2 ? "accent" : undefined}
                           onSetPrimary={setPrimary}
                           onSetSecondary={setSecondary}
@@ -398,7 +434,7 @@ export default function SettingsClient({ initial }: { initial: AppSettings }) {
                         />
                       ))}
                     </div>
-                    <p className="text-[10px] text-gray-400 mt-1.5">Click a swatch to assign it as primary, secondary, or accent.</p>
+                    <p className="text-[10px] text-gray-400 mt-2">Click a swatch to assign it as primary, secondary, or accent.</p>
                     <div className="flex gap-2 mt-2">
                       {extracted.colors.primary && (
                         <button onClick={() => setPrimary(extracted.colors.primary!)} className="text-[10px] px-2 py-0.5 border border-gray-200 rounded text-gray-600 hover:bg-white transition-colors">Use suggested primary</button>
