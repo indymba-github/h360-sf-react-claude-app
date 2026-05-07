@@ -11,6 +11,8 @@ import { refreshSession, refreshMcpSession, PROACTIVE_REFRESH_THRESHOLD_MS } fro
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+const MAX_TOOL_ITERATIONS = 15;
+
 /** Normalize tools from either MCP server variant into Anthropic's format. */
 function normalizeTools(mcpTools: Tool[]): Anthropic.Tool[] {
   return mcpTools.map((t) => ({
@@ -89,6 +91,40 @@ function sanitizeToolPropertyNames(tools: Anthropic.Tool[]): Anthropic.Tool[] {
       } as Anthropic.Tool["input_schema"],
     };
   });
+}
+
+// ── Hosted MCP tool deduplication ────────────────────────────────────────
+//
+// The hosted server exposes 40+ tools where many share a base name but differ
+// only by a permission-scope suffix: _reads, _all, _mutations, _deletes.
+// Sending all variants wastes context and pushes Claude toward the tool-call
+// limit. We keep one variant per base name, preferring _all > _reads > _mutations.
+
+const SCOPE_SUFFIX_RE = /_(reads|all|mutations|deletes)$/;
+const SCOPE_PRIORITY: Record<string, number> = { all: 3, reads: 2, mutations: 1, deletes: 0 };
+
+function deduplicateHostedTools(tools: Anthropic.Tool[]): Anthropic.Tool[] {
+  const best = new Map<string, { tool: Anthropic.Tool; priority: number }>();
+
+  for (const tool of tools) {
+    const m = tool.name.match(SCOPE_SUFFIX_RE);
+    if (!m) {
+      // No recognized suffix — keep as-is (won't collide with scoped variants)
+      if (!best.has(tool.name)) best.set(tool.name, { tool, priority: -1 });
+      continue;
+    }
+    const base = tool.name.slice(0, -m[0].length);
+    const priority = SCOPE_PRIORITY[m[1]] ?? 0;
+    const existing = best.get(base);
+    if (!existing || priority > existing.priority) {
+      best.set(base, { tool, priority });
+    }
+  }
+
+  const deduped = [...best.values()].map(({ tool }) => tool);
+  console.log("Raw tools from hosted MCP:", tools.length);
+  console.log("After dedup:", deduped.length);
+  return deduped;
 }
 
 // ── Resource context injection (local mode) ───────────────────────────────
@@ -452,7 +488,8 @@ export async function POST(request: NextRequest) {
             prompts.forEach(p => console.log(' -', p.name));
 
             promptNames = new Set(prompts.map(p => p.name));
-            const anthropicToolList = sanitizeToolPropertyNames([...normalizeTools(mcpTools), ...normalizePrompts(prompts)]);
+            const dedupedTools = deduplicateHostedTools(normalizeTools(mcpTools));
+            const anthropicToolList = sanitizeToolPropertyNames([...dedupedTools, ...normalizePrompts(prompts)]);
 
             const systemPrompt = buildSystemPrompt(effectiveMode, "", accountContext);
             console.log('=== SYSTEM PROMPT PREVIEW ===');
@@ -507,29 +544,48 @@ export async function POST(request: NextRequest) {
 
         // Routes to getPrompt() for prompt-backed tools, callTool() for everything else.
         // Closes over mcpClient and promptNames so retries automatically use the refreshed client.
-        const runTool = async (toolUse: Anthropic.ToolUseBlock): Promise<string> => {
-          console.log('=== TOOL CALL ===');
-          console.log('Tool:', toolUse.name);
-          console.log('Input:', JSON.stringify(toolUse.input).substring(0, 200));
-
+        const execTool = async (toolUse: Anthropic.ToolUseBlock): Promise<string> => {
           if (promptNames.has(toolUse.name)) {
             const result = await mcpClient!.getPrompt({
               name: toolUse.name,
               arguments: toolUse.input as Record<string, string>,
             });
-            const text = extractPromptText(result);
-            console.log('=== RESPONSE ===');
-            console.log('Length:', text.length, 'chars');
-            return text;
+            return extractPromptText(result);
           }
           const result = await mcpClient!.callTool({
             name: toolUse.name,
             arguments: toolUse.input as ToolInput,
           });
-          const text = extractText(result.content);
-          console.log('=== RESPONSE ===');
-          console.log('Length:', text.length, 'chars');
-          return text;
+          return extractText(result.content);
+        };
+
+        const runTool = async (toolUse: Anthropic.ToolUseBlock): Promise<string> => {
+          console.log('=== TOOL CALL ===');
+          console.log('Tool:', toolUse.name);
+          console.log('Input:', JSON.stringify(toolUse.input).substring(0, 200));
+
+          try {
+            const text = await execTool(toolUse);
+            console.log('=== RESPONSE ===');
+            console.log('Length:', text.length, 'chars');
+            return text;
+          } catch (err) {
+            // Per-tool reconnect for hosted session drops — one retry per call
+            if (effectiveMode === "hosted" && isMcpSessionDropped(err)) {
+              console.log("=== MCP SESSION EXPIRED, RECONNECTING ===");
+              await mcpClient!.close().catch(() => {});
+              mcpClient = await connectMcpClient(session.accessToken!, session.instanceUrl!, session.mcpAccessToken, effectiveMode);
+              try {
+                const text = await execTool(toolUse);
+                console.log('=== RESPONSE (after reconnect) ===');
+                console.log('Length:', text.length, 'chars');
+                return text;
+              } catch {
+                return "Data temporarily unavailable. Please try again.";
+              }
+            }
+            throw err;
+          }
         };
 
         // ── Agentic loop ──────────────────────────────────────────────────
@@ -555,7 +611,6 @@ export async function POST(request: NextRequest) {
         const toolCallsUsed: ToolCallRecord[] = [];
         let continueLoop = true;
         let loopIterations = 0;
-        const MAX_LOOP_ITERATIONS = 10;
         let sessionRefreshed = false; // allow at most one SF session refresh per request
 
         // Four-way discriminated outcome so each branch is type-safe
@@ -568,7 +623,7 @@ export async function POST(request: NextRequest) {
         const systemPrompt = buildSystemPrompt(effectiveMode, resourceContext);
 
         while (continueLoop) {
-          if (++loopIterations > MAX_LOOP_ITERATIONS) {
+          if (++loopIterations > MAX_TOOL_ITERATIONS) {
             controller.enqueue(sseEvent({ type: "error", error: "Tool call limit reached — response may be incomplete." }));
             break;
           }
