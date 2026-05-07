@@ -281,7 +281,7 @@ function sseEvent(data: object): Uint8Array {
   return encoder.encode(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-// ── MCP auth error detection ──────────────────────────────────────────────
+// ── MCP error detection ───────────────────────────────────────────────────
 
 function isMcpAuthError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -293,6 +293,17 @@ function isMcpAuthError(err: unknown): boolean {
     msg.includes("invalid token") ||
     msg.includes("token expired") ||
     msg.includes("access_denied")
+  );
+}
+
+/** True when the hosted MCP server dropped its session state (404 "not initialized"). */
+function isMcpSessionDropped(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes("not been initialized") ||
+    msg.includes("please reconnect") ||
+    (msg.includes("404") && msg.includes("initializ"))
   );
 }
 
@@ -405,6 +416,7 @@ export async function POST(request: NextRequest) {
         let anthropicTools: Anthropic.Tool[];
         let resourceContext = "";
         let mcpTokenRefreshed = false; // allow at most one MCP token refresh per request
+        let mcpReconnected = false;    // allow at most one session-drop reconnect per request
 
         const connectAndList = async () => {
           mcpClient = await connectMcpClient(session.accessToken!, session.instanceUrl!, session.mcpAccessToken, effectiveMode);
@@ -455,7 +467,16 @@ export async function POST(request: NextRequest) {
         try {
           anthropicTools = await connectAndList();
         } catch (connectErr) {
-          if (
+          if (effectiveMode === "hosted" && isMcpSessionDropped(connectErr) && !mcpReconnected) {
+            // Server dropped its state — reconnect with same tokens, no refresh needed
+            mcpReconnected = true;
+            console.log("=== MCP RECONNECT ===");
+            console.log("Reason: server not initialized");
+            const staleClient = mcpClient as Client | null;
+            if (staleClient) await staleClient.close().catch(() => {});
+            mcpClient = null;
+            anthropicTools = await connectAndList();
+          } else if (
             effectiveMode === "hosted" &&
             isMcpAuthError(connectErr) &&
             session.mcpRefreshToken &&
@@ -526,11 +547,12 @@ export async function POST(request: NextRequest) {
         const MAX_LOOP_ITERATIONS = 10;
         let sessionRefreshed = false; // allow at most one SF session refresh per request
 
-        // Three-way discriminated outcome so each branch is type-safe
+        // Four-way discriminated outcome so each branch is type-safe
         type ToolOutcome =
           | { kind: "ok";         result:  Anthropic.ToolResultBlockParam }
           | { kind: "sfExpired";  toolUse: Anthropic.ToolUseBlock }
-          | { kind: "mcpExpired"; toolUse: Anthropic.ToolUseBlock };
+          | { kind: "mcpExpired"; toolUse: Anthropic.ToolUseBlock }
+          | { kind: "mcpDropped"; toolUse: Anthropic.ToolUseBlock };
 
         const systemPrompt = buildSystemPrompt(effectiveMode, resourceContext);
 
@@ -606,6 +628,9 @@ export async function POST(request: NextRequest) {
 
                   return { kind: "ok", result: { type: "tool_result" as const, tool_use_id: toolUse.id, content: textContent } };
                 } catch (err) {
+                  if (effectiveMode === "hosted" && isMcpSessionDropped(err)) {
+                    return { kind: "mcpDropped", toolUse };
+                  }
                   // Hosted MCP transport throws on 401 — classify as mcpExpired for retry
                   if (effectiveMode === "hosted" && isMcpAuthError(err)) {
                     return { kind: "mcpExpired", toolUse };
@@ -623,13 +648,42 @@ export async function POST(request: NextRequest) {
               })
             );
 
-            const sfExpiredItems  = firstPass.filter((r): r is Extract<ToolOutcome, { kind: "sfExpired" }>  => r.kind === "sfExpired");
-            const mcpExpiredItems = firstPass.filter((r): r is Extract<ToolOutcome, { kind: "mcpExpired" }> => r.kind === "mcpExpired");
+            const sfExpiredItems   = firstPass.filter((r): r is Extract<ToolOutcome, { kind: "sfExpired" }>   => r.kind === "sfExpired");
+            const mcpExpiredItems  = firstPass.filter((r): r is Extract<ToolOutcome, { kind: "mcpExpired" }>  => r.kind === "mcpExpired");
+            const mcpDroppedItems  = firstPass.filter((r): r is Extract<ToolOutcome, { kind: "mcpDropped" }>  => r.kind === "mcpDropped");
 
             let toolResults: Anthropic.ToolResultBlockParam[];
 
+            // ── Branch 0: MCP server dropped session — reconnect and retry ─
+            if (mcpDroppedItems.length > 0 && !mcpReconnected) {
+              mcpReconnected = true;
+              console.log("=== MCP RECONNECT ===");
+              console.log("Reason: server not initialized");
+
+              await mcpClient!.close().catch(() => {});
+              mcpClient = await connectMcpClient(session.accessToken!, session.instanceUrl!, session.mcpAccessToken, effectiveMode);
+
+              const droppedRetried = await Promise.all(
+                mcpDroppedItems.map(async ({ toolUse }): Promise<Anthropic.ToolResultBlockParam> => {
+                  try {
+                    return { type: "tool_result" as const, tool_use_id: toolUse.id, content: await runTool(toolUse) };
+                  } catch (err) {
+                    return { type: "tool_result" as const, tool_use_id: toolUse.id, content: `Tool error: ${err instanceof Error ? err.message : String(err)}`, is_error: true };
+                  }
+                })
+              );
+
+              const droppedRetriedById = new Map(droppedRetried.map((r) => [r.tool_use_id, r]));
+              toolResults = firstPass.map((item) =>
+                item.kind === "mcpDropped"
+                  ? droppedRetriedById.get(item.toolUse.id)!
+                  : item.kind === "ok"
+                  ? item.result
+                  : { type: "tool_result" as const, tool_use_id: item.toolUse.id, content: "Retried after reconnect", is_error: true }
+              );
+
             // ── Branch 1: MCP token expired — refresh and retry ───────────
-            if (mcpExpiredItems.length > 0 && !mcpTokenRefreshed) {
+            } else if (mcpExpiredItems.length > 0 && !mcpTokenRefreshed) {
               mcpTokenRefreshed = true;
               controller.enqueue(sseEvent({ type: "status", text: "Refreshing MCP session…" }));
 
@@ -678,6 +732,8 @@ export async function POST(request: NextRequest) {
               );
 
             // ── Branch 3: exhausted retries ───────────────────────────────
+            } else if (mcpDroppedItems.length > 0) {
+              throw new Error("MCP server dropped session and reconnect already attempted");
             } else if (mcpExpiredItems.length > 0) {
               throw new Error("MCP_TOKEN_EXPIRED");
             } else if (sfExpiredItems.length > 0) {
