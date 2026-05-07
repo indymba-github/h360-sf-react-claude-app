@@ -324,10 +324,17 @@ async function connectMcpClient(
     if (!hostedMcpServerUrl) {
       throw new Error("SF_MCP_SERVER_URL is required when MCP_MODE=hosted");
     }
-    // Use the MCP-specific token (from SF_MCP_CLIENT_ID app) as the Bearer credential
     const bearerToken = mcpAccessToken ?? accessToken;
+    console.log("=== HOSTED MCP CONNECT ===");
+    console.log("URL:", hostedMcpServerUrl);
+    console.log("Token present:", !!bearerToken);
     transport = new StreamableHTTPClientTransport(new URL(hostedMcpServerUrl), {
-      requestInit: { headers: { Authorization: `Bearer ${bearerToken}` } },
+      requestInit: {
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          Accept: "application/json, text/event-stream",
+        },
+      },
     });
   } else {
     transport = new StdioClientTransport({
@@ -344,6 +351,10 @@ async function connectMcpClient(
 
   const client = new Client({ name: "sf-dashboard", version: "1.0.0" });
   await client.connect(transport);
+  if (effectiveMode === "hosted") {
+    console.log("=== HOSTED MCP CONNECTED ===");
+    console.log("Tools and prompts available");
+  }
   return client;
 }
 
