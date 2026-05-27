@@ -3,8 +3,8 @@ import { getSession } from "@/lib/session";
 import { getEffectiveMcpMode } from "@/lib/mcp-config";
 import { sfQuery, getAccount, getNewsAlerts, type SFOpportunity, type SFContact, type SFCase } from "@/lib/salesforce";
 import { formatCurrency, formatCount } from "@/lib/format";
-import ChatPanel from "@/components/ChatPanel";
 import PageHeading from "@/components/PageHeading";
+import AccountDetailClient from "./AccountDetailClient";
 import SectionHeader from "@/components/SectionHeader";
 import dynamic from "next/dynamic";
 
@@ -348,8 +348,8 @@ export default async function AccountDetailPage({
         </div>
       </div>
 
-      {/* ── AI chat panel ── */}
-      <ChatPanel
+      {/* ── AI chat panel + render slot ── */}
+      <AccountDetailClient
         accountContext={{
           accountId: acct.Id,
           accountName: acct.Name,

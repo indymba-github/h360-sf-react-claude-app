@@ -8,6 +8,7 @@ import { getSession } from "@/lib/session";
 import { getEffectiveMcpMode, localMcpServerPath, hostedMcpServerUrl } from "@/lib/mcp-config";
 import type { McpMode } from "@/lib/mcp-config";
 import { refreshSession, refreshMcpSession, PROACTIVE_REFRESH_THRESHOLD_MS } from "@/lib/token-refresh";
+import { hasRenderDirective, type RenderDirective } from "@/lib/render-directives";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -209,7 +210,29 @@ const BASE_SYSTEM_PROMPT =
   "```\n" +
   "The questions should be concise (under 8 words each), specific to the current context, and " +
   "phrased as natural follow-ons to what you just said. Do not add this block if the response is " +
-  "a write proposal (asking for confirmation before a write operation).";
+  "a write proposal (asking for confirmation before a write operation).\n\n" +
+  "PROACTIVE RISK BRIEFING:\n" +
+  "You have access to render_account_risk_briefing, which renders an interactive Account Risk " +
+  "Briefing card overlaid on the user's screen.\n\n" +
+  "When you fetch account data (using sf_get_account, sf_get_opportunities, " +
+  "sf_get_recent_activity, or similar tools) during normal conversation, examine the data for " +
+  "risk signals. Risk signals include:\n" +
+  "- No recorded activities in the last 30+ days\n" +
+  "- Multiple opportunities closed-lost in the last 180 days\n" +
+  "- Stalled open opportunities (no recent modifications)\n" +
+  "- Single-contact accounts (single relationship thread)\n" +
+  "- Open opportunities with no activity for a long time\n\n" +
+  "When you detect ONE OR MORE of these signals, OFFER a risk briefing AT THE END of your " +
+  "response using natural language, e.g.:\n" +
+  "\"I noticed [specific signal]. Would you like me to pull up a full risk briefing for this account?\"\n\n" +
+  "If the user responds affirmatively ('yes', 'sure', 'please', 'go ahead', 'show me', etc.), " +
+  "THEN call render_account_risk_briefing with the accountId.\n\n" +
+  "RULES:\n" +
+  "- Only suggest when you've genuinely seen a risk signal. Do not suggest on healthy accounts.\n" +
+  "- Suggest at most ONCE per conversation.\n" +
+  "- Do not suggest if the user has already viewed a risk briefing in this conversation.\n" +
+  "- When the user EXPLICITLY asks for a risk briefing or risk view, call the tool directly " +
+  "without asking for confirmation.";
 
 const HOSTED_PROMPT_ADDENDUM =
   "\n\nYou have access to pre-built Salesforce prompt templates. " +
@@ -526,6 +549,9 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // Collected render directives from this request — last one wins
+        let pendingRenderDirective: RenderDirective | null = null;
+
         // Routes to getPrompt() for prompt-backed tools, callTool() for everything else.
         // Closes over mcpClient and promptNames so retries automatically use the refreshed client.
         const execTool = async (toolUse: Anthropic.ToolUseBlock): Promise<string> => {
@@ -540,6 +566,10 @@ export async function POST(request: NextRequest) {
             name: toolUse.name,
             arguments: toolUse.input as ToolInput,
           });
+          // Capture render directive if tool returned one
+          if (hasRenderDirective(result)) {
+            pendingRenderDirective = result.render;
+          }
           return extractText(result.content);
         };
 
@@ -829,7 +859,11 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        controller.enqueue(sseEvent({ type: "done", toolCalls: toolCallsUsed }));
+        controller.enqueue(sseEvent({
+          type: "done",
+          toolCalls: toolCallsUsed,
+          render: pendingRenderDirective,
+        }));
       } catch (err) {
         const isSessionExpired =
           err instanceof Error &&

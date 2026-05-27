@@ -17,6 +17,7 @@ import {
 } from "@/lib/prompts";
 import { useAiContext } from "@/lib/use-ai-context";
 import MicButton from "@/components/MicButton";
+import type { RenderDirective } from "@/lib/render-directives";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -55,7 +56,7 @@ interface Message {
 // SSE event shapes coming from the server
 interface SseToken         { type: "token";         text: string }
 interface SseStatus        { type: "status";        text: string }
-interface SseDone          { type: "done";           toolCalls: ToolCall[] }
+interface SseDone          { type: "done";           toolCalls: ToolCall[]; render?: RenderDirective | null }
 interface SseError         { type: "error";          error: string }
 interface SseWriteComplete { type: "write_complete"; toolName: string; success: boolean; url: string | null }
 interface SseToolStart     { type: "tool_start";    toolId: string; toolName: string }
@@ -802,10 +803,12 @@ export default function ChatPanel({
   accountContext: accountContextProp,
   initialMcpMode = "local",
   hasMcpToken = false,
+  onRender,
 }: {
   accountContext?: AccountContext;
   initialMcpMode?: McpMode;
   hasMcpToken?: boolean;
+  onRender?: (directive: RenderDirective | null) => void;
 }) {
   const pathname = usePathname();
 
@@ -903,6 +906,21 @@ export default function ChatPanel({
   // send is stable (useCallback with stable deps) — including it would require memoizing with all its deps
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingPrompt, clearPendingPrompt]);
+
+  // Listen for 'Ask AI about this' events dispatched by rendered components
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const evt = e as CustomEvent<{ question: string; accountId?: string }>;
+      const question = evt.detail?.question;
+      if (!question) return;
+      setCollapsed(false);
+      setPanelWidthPct((prev) => (prev < MIN_WIDTH_PCT + 0.01 ? DEFAULT_WIDTH_PCT : prev));
+      setTimeout(() => send(question), 50);
+    };
+    window.addEventListener("chat:ask", handler);
+    return () => window.removeEventListener("chat:ask", handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Load persisted state on mount (client-only)
   useEffect(() => {
@@ -1273,6 +1291,10 @@ export default function ChatPanel({
                 followUps: followUps.length > 0 ? followUps : undefined,
               },
             ]);
+            // Forward render directive to parent (account detail page)
+            if (event.render && onRender) {
+              onRender(event.render);
+            }
             indicatorMap.clear();
             pendingWriteRef.current = null;
             setActiveIndicators([]);
