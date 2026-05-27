@@ -6,34 +6,37 @@ For getting the app running, see `SALESFORCE_SETUP.md`. For day-to-day Settings 
 
 ## System overview
 
+```
+
 ┌─────────────────────────────────────────────────────────┐
 │           Next.js Dashboard (React frontend)            │
-│  ┌────────────┐  ┌──────────────┐  ┌────────────────┐  │
-│  │  Dashboard  │  │   Account    │  │  AI Assistant  │  │
-│  │   KPIs      │  │   Detail     │  │  (3 modes)     │  │
-│  │  Alerts     │  │   Related    │  │  Local/Hosted/ │  │
-│  │  Pipeline   │  │   Briefings  │  │  Agentforce    │  │
-│  └────────────┘  └──────────────┘  └────────────────┘  │
+│  ┌────────────┐  ┌──────────────┐  ┌────────────────┐   │
+│  │  Dashboard │  │   Account    │  │  AI Assistant  │   │
+│  │   KPIs     │  │   Detail     │  │  (3 modes)     │   │
+│  │  Alerts    │  │   Related    │  │  Local/Hosted/ │   │
+│  │  Pipeline  │  │   Briefings  │  │  Agentforce    │   │
+│  └────────────┘  └──────────────┘  └────────────────┘   │
 ├─────────────────────────────────────────────────────────┤
 │           Next.js API Routes (backend)                  │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────────┐  │
-│  │/api/auth │ │/api/chat │ │/api/agent│ │/api/      │  │
-│  │OAuth     │ │Claude +  │ │Agentforce│ │settings   │  │
-│  │flows     │ │MCP tools │ │Agent API │ │/extract   │  │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───────────┘  │
-└───────┼─────────────┼───────────┼───────────────────────┘
-│             │           │
-▼             ▼           ▼
-Salesforce    ┌─────────┐   Agentforce
-REST API      │ MCP     │   Agent API
-(OAuth 2.0)   │ Server  │   (api.salesforce.com)
-└────┬────┘
-│
-┌───────┴────────┐
-▼                ▼
-Local MCP        Salesforce
-(stdio,          Hosted MCP
-JWT Bearer)     (api.salesforce.com)
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────────┐   │
+│  │/api/auth │ │/api/chat │ │/api/agent│ │/api/      │   │
+│  │OAuth     │ │Claude +  │ │Agentforce│ │settings   │   │
+│  │flows     │ │MCP tools │ │Agent API │ │/extract   │   │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───────────┘   │
+└───────┼────────────┼────────────┼───────────────────────┘
+        │            │            │
+        ▼            ▼            ▼
+   Salesforce    ┌─────────┐   Agentforce
+   REST API      │ MCP     │   Agent API
+   (OAuth 2.0)   │ Server  │   (api.salesforce.com)
+                 └────┬────┘
+                      │
+              ┌───────┴────────┐
+              ▼                ▼
+         Local MCP        Salesforce
+         (stdio,          Hosted MCP
+          JWT Bearer)     (api.salesforce.com)
+```
 
 ## Three AI modes
 
@@ -81,7 +84,7 @@ See `SALESFORCE_SETUP.md` for the step-by-step configuration of each flow.
 ## Chat route data flows
 
 ### Local mode
-
+```
 User message
 → /api/chat route
 → Spawn local MCP server as child process (if not already running)
@@ -91,12 +94,12 @@ User message
 → Claude calls tools → MCP server queries Salesforce
 → Loop until Claude produces final response
 → Return to frontend
+```
 
 The MCP server is spawned per session and uses stdio for communication. The user's Salesforce access token (from the dashboard's session cookie) is passed through as an environment variable so all queries enforce RBAC for the logged-in user.
 
 ### Hosted mode
-
-
+```
 User message
 → /api/chat route
 → Connect to Salesforce Hosted MCP via StreamableHTTPClientTransport
@@ -107,12 +110,13 @@ User message
 → Claude calls tools → Hosted MCP queries Salesforce
 → Loop until final response
 → Return to frontend
+```
 
 The Hosted MCP handshake is a three-step process: `initialize` → `notifications/initialized` → tool calls. Skipping the second step causes persistent 404 errors. Hosted MCP also typically returns tools duplicated across permission scopes (reads, all, mutations, deletes); the app deduplicates these before sending to Claude.
 
 ### Agentforce mode
 
-
+```
 User message
 → /api/agent route
 → Get client credentials token (JWT-based)
@@ -124,6 +128,7 @@ Body: { externalSessionKey, instanceConfig.endpoint, bypassUser }
 → Parse structured response (Inform / Inquire / aggregates)
 → Return agent response to frontend
 → End session
+```
 
 The Agentforce API uses `api.salesforce.com` (NOT the org's My Domain URL). The session is authenticated with a JWT-based access token, not the user's session token. The `bypassUser` flag controls whether the session is bound to a specific Salesforce user.
 
