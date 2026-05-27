@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
+import { parseAgentforceResponse, type AgentforceNormalizedResponse } from "@/lib/agentforce-types";
 
-const SF_LOGIN_URL         = (process.env.SF_LOGIN_URL ?? "").replace(/\/$/, "");
-const AGENT_CLIENT_ID      = process.env.SF_AGENT_CLIENT_ID ?? "";
-const AGENT_CLIENT_SECRET  = process.env.SF_AGENT_CLIENT_SECRET ?? "";
-const AGENT_ID             = process.env.SF_AGENT_ID ?? "";
+const SF_LOGIN_URL        = (process.env.SF_LOGIN_URL ?? "").replace(/\/$/, "");
+const AGENT_CLIENT_ID     = process.env.SF_AGENT_CLIENT_ID ?? "";
+const AGENT_CLIENT_SECRET = process.env.SF_AGENT_CLIENT_SECRET ?? "";
+const ENV_AGENT_ID        = process.env.SF_AGENT_ID ?? "";
 
 // All Agent API calls go to the global gateway, not the org's My Domain URL.
 const AGENT_BASE_URL = "https://api.salesforce.com";
@@ -60,9 +61,9 @@ async function getClientCredentialsToken(): Promise<string> {
 
 // ── Agent session helpers ─────────────────────────────────────────────────────
 
-async function startSession(accessToken: string): Promise<string> {
+async function startSession(accessToken: string, agentId: string): Promise<string> {
   const res = await fetch(
-    `${AGENT_BASE_URL}/einstein/ai-agent/v1/agents/${AGENT_ID}/sessions`,
+    `${AGENT_BASE_URL}/einstein/ai-agent/v1/agents/${agentId}/sessions`,
     {
       method: "POST",
       headers: {
@@ -92,7 +93,7 @@ async function sendMessage(
   sessionId: string,
   sequenceId: number,
   text: string,
-): Promise<string> {
+): Promise<AgentforceNormalizedResponse> {
   const res = await fetch(
     `${AGENT_BASE_URL}/einstein/ai-agent/v1/sessions/${sessionId}/messages`,
     {
@@ -116,15 +117,22 @@ async function sendMessage(
     throw new Error(`Agent message failed (${res.status}): ${text}`);
   }
 
-  const data = await res.json() as {
-    messages?: Array<{ type?: string; message?: string }>;
-  };
+  const data = await res.json();
 
-  // Validated shape: { messages: [{ type: "Inform", message: "text" }] }
-  if (Array.isArray(data.messages) && data.messages.length > 0) {
-    return data.messages[0].message ?? "";
+  if (process.env.AGENTFORCE_DEBUG === "true") {
+    console.log("═══ Agentforce raw response ═══");
+    console.log(JSON.stringify(data, null, 2));
+    console.log("Message count:", Array.isArray(data.messages) ? data.messages.length : 0);
+    if (Array.isArray(data.messages)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      data.messages.forEach((m: any, i: number) => {
+        console.log(`Message [${i}]:`, JSON.stringify(m, null, 2));
+      });
+    }
+    console.log("═══ End Agentforce raw response ═══");
   }
-  return JSON.stringify(data);
+
+  return parseAgentforceResponse(data);
 }
 
 async function endSession(accessToken: string, sessionId: string): Promise<void> {
@@ -154,15 +162,24 @@ export async function POST(request: NextRequest) {
     action: "message" | "end";
     text?: string;
     accountContext?: AgentAccountContext;
+    agentId?: string;
   } | null;
 
   if (!body?.action) {
     return NextResponse.json({ error: "action required" }, { status: 400 });
   }
 
-  if (!AGENT_CLIENT_ID || !AGENT_CLIENT_SECRET || !AGENT_ID) {
+  if (!AGENT_CLIENT_ID || !AGENT_CLIENT_SECRET) {
     return NextResponse.json(
-      { error: "Agentforce is not configured — set SF_AGENT_ID, SF_AGENT_CLIENT_ID, SF_AGENT_CLIENT_SECRET" },
+      { error: "Agentforce is not configured — set SF_AGENT_CLIENT_ID and SF_AGENT_CLIENT_SECRET" },
+      { status: 503 }
+    );
+  }
+
+  const resolvedAgentId = body.agentId || ENV_AGENT_ID;
+  if (!resolvedAgentId) {
+    return NextResponse.json(
+      { error: "No Agentforce agent configured — add an agent in Settings → AI provider" },
       { status: 503 }
     );
   }
@@ -195,7 +212,7 @@ export async function POST(request: NextRequest) {
 
     // Start a new session if we don't have one
     if (!session.agentSessionId) {
-      session.agentSessionId  = await startSession(accessToken);
+      session.agentSessionId  = await startSession(accessToken, resolvedAgentId);
       session.agentSequenceId = 0;
     }
 
@@ -203,16 +220,23 @@ export async function POST(request: NextRequest) {
 
     try {
       const userText = body.text!.trim();
+      const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
       const ctx = body.accountContext;
       const messageText = ctx
-        ? `The user is currently viewing the account record for ${ctx.accountName} (Account ID: ${ctx.accountId}). ` +
+        ? `Today is ${today}. The user is currently viewing the account record for ${ctx.accountName} (Account ID: ${ctx.accountId}). ` +
           `When they say "her", "his", "this account" or use a first name, they mean ${ctx.accountName}.\n\n` +
           `User question: ${userText}`
-        : userText;
-      const reply = await sendMessage(accessToken, session.agentSessionId, sequenceId, messageText);
+        : `Today is ${today}. ${userText}`;
+      const response = await sendMessage(accessToken, session.agentSessionId, sequenceId, messageText);
       session.agentSequenceId = sequenceId;
       await session.save();
-      return NextResponse.json({ reply });
+      return NextResponse.json({
+        reply: response.text,
+        type: response.type,
+        choices: response.choices,
+        results: response.results,
+        summaries: response.summaries,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
 

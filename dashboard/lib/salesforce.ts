@@ -1,7 +1,13 @@
 // Lightweight Salesforce REST API client for Next.js server components.
 // Uses the user's OAuth access token from the session — Salesforce RBAC applies.
 
-const SF_API_VERSION = "v59.0";
+export function buildSalesforceRecordUrl(instanceUrl: string, recordId: string): string {
+  return `${instanceUrl}/lightning/r/${recordId}/view`;
+}
+
+import { refreshSession } from "./token-refresh";
+
+export const SF_API_VERSION = "v62.0";
 
 interface QueryResult<T> {
   totalSize: number;
@@ -45,6 +51,25 @@ export async function sfQuery<T>(
   return result.records;
 }
 
+/**
+ * Session-aware sfQuery wrapper that transparently refreshes the token on 401
+ * and retries once before rethrowing.
+ */
+export async function sfQueryWithRefresh<T>(
+  session: import("iron-session").IronSession<import("./session-config").SessionData>,
+  soql: string
+): Promise<T[]> {
+  try {
+    return await sfQuery<T>(session.instanceUrl!, session.accessToken!, soql);
+  } catch (err) {
+    if (err instanceof Error && err.message === "SF_SESSION_EXPIRED") {
+      await refreshSession(session);
+      return sfQuery<T>(session.instanceUrl!, session.accessToken!, soql);
+    }
+    throw err;
+  }
+}
+
 // ── Typed query helpers used by pages ─────────────────────────────────────
 
 export interface SFAccount {
@@ -61,6 +86,7 @@ export interface SFAccount {
   Description: string | null;
   CreatedDate: string;
   LastModifiedDate: string;
+  LastActivityDate?: string | null;
   Owner: { Name: string } | null;
 }
 
@@ -108,12 +134,25 @@ export async function listAccounts(
   limit = 50,
   offset = 0
 ): Promise<SFAccount[]> {
-  return sfQuery<SFAccount>(
-    instanceUrl,
-    accessToken,
-    `SELECT Id, Name, Industry, AnnualRevenue, NumberOfEmployees, BillingCity, BillingState, Type
-     FROM Account ORDER BY Name ASC LIMIT ${limit} OFFSET ${offset}`
-  );
+  const fullSoql = `SELECT Id, Name, Industry, AnnualRevenue, NumberOfEmployees, BillingCity, BillingState, Type
+     FROM Account ORDER BY Name ASC LIMIT ${limit} OFFSET ${offset}`;
+  try {
+    return await sfQuery<SFAccount>(instanceUrl, accessToken, fullSoql);
+  } catch (err) {
+    const body = err instanceof Error ? err.message : String(err);
+    if (body.includes("INVALID_FIELD")) {
+      console.warn(
+        "[listAccounts] INVALID_FIELD on full field set — retrying with narrow fields. Error:",
+        body
+      );
+      return sfQuery<SFAccount>(
+        instanceUrl,
+        accessToken,
+        `SELECT Id, Name, AnnualRevenue FROM Account ORDER BY AnnualRevenue DESC NULLS LAST LIMIT ${limit} OFFSET ${offset}`
+      );
+    }
+    throw err;
+  }
 }
 
 export async function getAccountCount(
@@ -128,12 +167,116 @@ export async function getAccountCount(
   return result.totalSize;
 }
 
+// ── Paginated accounts query ───────────────────────────────────────────────
+
+function escapeSOQL(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/[\r\n]/g, " ");
+}
+
+export type AccountSortBy = "name-asc" | "revenue-desc" | "last-activity-desc";
+
+export interface AccountQueryOptions {
+  pageSize?: number;
+  afterName?: string;
+  offset?: number;
+  industry?: string;
+  search?: string;
+  sortBy?: AccountSortBy;
+}
+
+export interface AccountQueryResult {
+  accounts: SFAccount[];
+  hasMore: boolean;
+  totalCount: number;
+}
+
+export async function queryAccounts(
+  instanceUrl: string,
+  accessToken: string,
+  options: AccountQueryOptions = {}
+): Promise<AccountQueryResult> {
+  const { pageSize = 200, afterName, offset = 0, industry, search, sortBy = "name-asc" } = options;
+
+  const whereClauses: string[] = [];
+
+  if (industry && industry !== "all") {
+    whereClauses.push(`Industry = '${escapeSOQL(industry)}'`);
+  }
+
+  if (search?.trim()) {
+    const term = escapeSOQL(search.trim());
+    whereClauses.push(`(Name LIKE '%${term}%' OR BillingCity LIKE '%${term}%' OR Industry LIKE '%${term}%')`);
+  }
+
+  if (afterName && sortBy === "name-asc") {
+    whereClauses.push(`Name > '${escapeSOQL(afterName)}'`);
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
+  let orderBy: string;
+  switch (sortBy) {
+    case "revenue-desc":
+      orderBy = "ORDER BY AnnualRevenue DESC NULLS LAST, Id ASC";
+      break;
+    case "last-activity-desc":
+      orderBy = "ORDER BY LastActivityDate DESC NULLS LAST, Id ASC";
+      break;
+    default:
+      orderBy = "ORDER BY Name ASC, Id ASC";
+  }
+
+  const offsetClause = sortBy !== "name-asc" && offset > 0 ? `OFFSET ${offset}` : "";
+
+  const dataQuery = [
+    "SELECT Id, Name, Industry, AnnualRevenue, NumberOfEmployees,",
+    "BillingCity, BillingState, LastActivityDate",
+    "FROM Account",
+    whereSql,
+    orderBy,
+    `LIMIT ${pageSize + 1}`,
+    offsetClause,
+  ].filter(Boolean).join(" ");
+
+  const countQuery = `SELECT COUNT() FROM Account ${whereSql}`.trim();
+
+  const [dataResult, countResult] = await Promise.all([
+    sfFetch<{ totalSize: number; records: SFAccount[] }>(
+      instanceUrl, accessToken, `/query?q=${encodeURIComponent(dataQuery)}`
+    ),
+    sfFetch<{ totalSize: number; records: [] }>(
+      instanceUrl, accessToken, `/query?q=${encodeURIComponent(countQuery)}`
+    ),
+  ]);
+
+  const records = dataResult.records.slice(0, pageSize);
+  const hasMore = dataResult.records.length > pageSize;
+
+  return { accounts: records, hasMore, totalCount: countResult.totalSize };
+}
+
+export async function getAccountIndustries(
+  instanceUrl: string,
+  accessToken: string
+): Promise<string[]> {
+  try {
+    const result = await sfFetch<{ totalSize: number; records: Array<{ Industry: string }> }>(
+      instanceUrl,
+      accessToken,
+      `/query?q=${encodeURIComponent("SELECT Industry FROM Account WHERE Industry != null GROUP BY Industry ORDER BY Industry ASC")}`
+    );
+    return result.records.map((r) => r.Industry).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 export async function getAccount(
   instanceUrl: string,
   accessToken: string,
   accountId: string
 ): Promise<SFAccount | null> {
-  const safe = accountId.replace(/'/g, "\\'");
+  const safe = accountId.replace(/['"\\]/g, "");
   const records = await sfQuery<SFAccount>(
     instanceUrl,
     accessToken,
@@ -150,7 +293,7 @@ export async function getAccountOpportunities(
   accessToken: string,
   accountId: string
 ): Promise<SFOpportunity[]> {
-  const safe = accountId.replace(/'/g, "\\'");
+  const safe = accountId.replace(/['"\\]/g, "");
   return sfQuery<SFOpportunity>(
     instanceUrl,
     accessToken,
@@ -164,7 +307,7 @@ export async function getAccountContacts(
   accessToken: string,
   accountId: string
 ): Promise<SFContact[]> {
-  const safe = accountId.replace(/'/g, "\\'");
+  const safe = accountId.replace(/['"\\]/g, "");
   return sfQuery<SFContact>(
     instanceUrl,
     accessToken,
@@ -178,7 +321,7 @@ export async function getAccountCases(
   accessToken: string,
   accountId: string
 ): Promise<SFCase[]> {
-  const safe = accountId.replace(/'/g, "\\'");
+  const safe = accountId.replace(/['"\\]/g, "");
   return sfQuery<SFCase>(
     instanceUrl,
     accessToken,
@@ -340,7 +483,7 @@ export async function getFinancialAccounts(
   accessToken: string,
   accountId: string
 ): Promise<SFFinancialAccount[]> {
-  const safe = accountId.replace(/'/g, "\\'");
+  const safe = accountId.replace(/['"\\]/g, "");
   try {
     return await sfQuery<SFFinancialAccount>(
       instanceUrl,
@@ -375,7 +518,7 @@ export async function getFinancialAccountRoles(
   accessToken: string,
   financialAccountId: string
 ): Promise<SFFinancialAccountRole[]> {
-  const safe = financialAccountId.replace(/'/g, "\\'");
+  const safe = financialAccountId.replace(/['"\\]/g, "");
   try {
     return await sfQuery<SFFinancialAccountRole>(
       instanceUrl,
@@ -410,7 +553,7 @@ export async function getAccountRelationships(
   accessToken: string,
   accountId: string
 ): Promise<SFAccountRelationship[]> {
-  const safe = accountId.replace(/'/g, "\\'");
+  const safe = accountId.replace(/['"\\]/g, "");
   try {
     return await sfQuery<SFAccountRelationship>(
       instanceUrl,
@@ -430,4 +573,146 @@ export async function getAccountRelationships(
   } catch {
     return [];
   }
+}
+
+// ── Task queries ───────────────────────────────────────────────────────────
+
+export interface SFTask {
+  Id: string;
+  Subject: string | null;
+  Status: string;
+  Priority: string | null;
+  ActivityDate: string | null;
+  Description: string | null;
+  WhatId: string | null;
+  What: { Name: string } | null;
+  WhoId: string | null;
+  Who: { Name: string } | null;
+  CreatedDate: string;
+  Owner: { Name: string } | null;
+}
+
+const TASK_FIELDS = `
+  SELECT Id, Subject, Status, Priority,
+    ActivityDate, Description,
+    WhatId, What.Name,
+    WhoId, Who.Name,
+    CreatedDate, Owner.Name
+  FROM Task
+`;
+
+export async function getNewsAlerts(
+  instanceUrl: string,
+  accessToken: string,
+  accountId?: string
+): Promise<SFTask[]> {
+  const safe = accountId?.replace(/['"\\]/g, "");
+  const accountFilter = safe ? `AND WhatId = '${safe}'` : "";
+  return sfQuery<SFTask>(
+    instanceUrl,
+    accessToken,
+    `${TASK_FIELDS}
+     WHERE Subject LIKE 'News Alert:%'
+     AND Status != 'Completed'
+     ${accountFilter}
+     ORDER BY CreatedDate DESC
+     LIMIT 20`
+  );
+}
+
+export async function getRecentTasks(
+  instanceUrl: string,
+  accessToken: string,
+  accountId?: string
+): Promise<SFTask[]> {
+  const safe = accountId?.replace(/['"\\]/g, "");
+  const accountFilter = safe ? `AND WhatId = '${safe}'` : "";
+  return sfQuery<SFTask>(
+    instanceUrl,
+    accessToken,
+    `${TASK_FIELDS}
+     WHERE Subject NOT LIKE 'News Alert:%'
+     ${accountFilter}
+     ORDER BY CreatedDate DESC
+     LIMIT 20`
+  );
+}
+
+// ── Dashboard KPI helpers ──────────────────────────────────────────────────
+
+export interface SFDashboardKpis {
+  accountsOwned: number;
+  openPipelineAmount: number | null;
+  openDealsCount: number;
+  winRate: number; // 0–100
+  avgWonDealSize: number | null;
+  openCasesCount: number;
+}
+
+export async function getDashboardKpis(
+  instanceUrl: string,
+  accessToken: string,
+  userId: string
+): Promise<SFDashboardKpis> {
+  const safe = userId.replace(/['"\\]/g, "");
+
+  const [
+    accountsResult,
+    pipelineResult,
+    openDealsResult,
+    winLossResult,
+    avgWonResult,
+    casesResult,
+  ] = await Promise.all([
+    sfFetch<{ totalSize: number; done: boolean; records: Array<{ cnt: number }> }>(
+      instanceUrl,
+      accessToken,
+      `/query?q=${encodeURIComponent(`SELECT COUNT(Id) cnt FROM Account WHERE OwnerId = '${safe}'`)}`
+    ).catch(() => null),
+
+    sfFetch<{ totalSize: number; done: boolean; records: Array<{ totalAmt: number | null }> }>(
+      instanceUrl,
+      accessToken,
+      `/query?q=${encodeURIComponent(`SELECT SUM(Amount) totalAmt FROM Opportunity WHERE IsClosed = false AND OwnerId = '${safe}'`)}`
+    ).catch(() => null),
+
+    sfFetch<{ totalSize: number; done: boolean; records: Array<{ cnt: number }> }>(
+      instanceUrl,
+      accessToken,
+      `/query?q=${encodeURIComponent(`SELECT COUNT(Id) cnt FROM Opportunity WHERE IsClosed = false AND OwnerId = '${safe}'`)}`
+    ).catch(() => null),
+
+    sfFetch<{ totalSize: number; done: boolean; records: Array<{ IsWon: boolean; cnt: number }> }>(
+      instanceUrl,
+      accessToken,
+      `/query?q=${encodeURIComponent(`SELECT IsWon, COUNT(Id) cnt FROM Opportunity WHERE IsClosed = true AND OwnerId = '${safe}' GROUP BY IsWon`)}`
+    ).catch(() => null),
+
+    sfFetch<{ totalSize: number; done: boolean; records: Array<{ avgAmt: number | null }> }>(
+      instanceUrl,
+      accessToken,
+      `/query?q=${encodeURIComponent(`SELECT AVG(Amount) avgAmt FROM Opportunity WHERE IsClosed = true AND StageName = 'Closed Won' AND OwnerId = '${safe}'`)}`
+    ).catch(() => null),
+
+    sfFetch<{ totalSize: number; done: boolean; records: Array<{ cnt: number }> }>(
+      instanceUrl,
+      accessToken,
+      `/query?q=${encodeURIComponent(`SELECT COUNT(Id) cnt FROM Case WHERE Status != 'Closed' AND OwnerId = '${safe}'`)}`
+    ).catch(() => null),
+  ]);
+
+  const wonRow = winLossResult?.records.find((r) => r.IsWon === true);
+  const lostRow = winLossResult?.records.find((r) => r.IsWon === false);
+  const won = wonRow?.cnt ?? 0;
+  const lost = lostRow?.cnt ?? 0;
+  const total = won + lost;
+
+  return {
+    accountsOwned: accountsResult?.records[0]?.cnt ?? 0,
+    openPipelineAmount: pipelineResult?.records[0]?.totalAmt ?? null,
+    openDealsCount: openDealsResult?.records[0]?.cnt ?? 0,
+    winRate: total > 0 ? Math.round((won / total) * 100) : 0,
+    avgWonDealSize: avgWonResult?.records[0]?.avgAmt ?? null,
+    openCasesCount: casesResult?.records[0]?.cnt ?? 0,
+  };
 }

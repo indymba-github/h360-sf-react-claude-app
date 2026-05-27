@@ -1,33 +1,52 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { getEffectiveMcpMode } from "@/lib/mcp-config";
-import { listAccounts, getAccountCount } from "@/lib/salesforce";
-import AccountSearch from "@/components/AccountSearch";
+import { queryAccounts, getAccountIndustries } from "@/lib/salesforce";
 import ChatPanel from "@/components/ChatPanel";
+import PageHeading from "@/components/PageHeading";
+import AccountsListClient from "@/components/AccountsListClient";
 
 export default async function AccountsPage() {
   const session = await getSession();
-  if (!session.accessToken || !session.instanceUrl) {
-    redirect("/");
-  }
+  if (!session.accessToken || !session.instanceUrl) redirect("/");
 
   const effectiveMcpMode = getEffectiveMcpMode(session.mcpMode);
 
-  const [accounts, totalCount] = await Promise.all([
-    listAccounts(session.instanceUrl, session.accessToken, 50, 0).catch(() => []),
-    getAccountCount(session.instanceUrl, session.accessToken).catch(() => 0),
+  const [initial, industries] = await Promise.all([
+    queryAccounts(session.instanceUrl, session.accessToken, {
+      pageSize: 200,
+      sortBy: "name-asc",
+    }).catch(() => ({ accounts: [], hasMore: false, totalCount: 0 })),
+    getAccountIndustries(session.instanceUrl, session.accessToken),
   ]);
 
   return (
     <div className="flex h-full">
-      <div className="flex-1 overflow-y-auto p-6 md:p-8 min-w-0">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Accounts</h1>
-        </div>
+      {/* ── Main content ── */}
+      <div className="flex-1 overflow-y-auto min-w-0" style={{ background: "var(--color-paper)" }}>
+        <div className="px-8 pt-8 pb-12">
 
-        <AccountSearch accounts={accounts} totalCount={totalCount} instanceUrl={session.instanceUrl} />
+          {/* Page heading */}
+          <div className="mb-8">
+            <PageHeading
+              categoryLabel={`Directory · ${initial.totalCount.toLocaleString()} account${initial.totalCount !== 1 ? "s" : ""}`}
+              headline="Accounts."
+            />
+          </div>
+
+          {/* Client-side list with pagination */}
+          <AccountsListClient
+            instanceUrl={session.instanceUrl}
+            initialAccounts={initial.accounts}
+            initialHasMore={initial.hasMore}
+            initialTotalCount={initial.totalCount}
+            industries={industries}
+          />
+
+        </div>
       </div>
 
+      {/* ── AI chat panel ── */}
       <ChatPanel initialMcpMode={effectiveMcpMode} hasMcpToken={!!session.mcpAccessToken} />
     </div>
   );

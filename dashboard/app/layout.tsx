@@ -1,11 +1,20 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, Source_Serif_4 } from "next/font/google";
 import "./globals.css";
 import AppShell from "@/components/AppShell";
+import ThemeProvider from "@/components/ThemeProvider";
 import { getSession } from "@/lib/session";
 import { getSettings } from "@/lib/settings";
+import { brandAccentForDarkMode, brandForegroundOn } from "@/lib/brandColors";
 
-const inter = Inter({ subsets: ["latin"] });
+const inter = Inter({ subsets: ["latin"], variable: "--loaded-inter" });
+
+const sourceSerif4 = Source_Serif_4({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  style: ["normal", "italic"],
+  variable: "--loaded-source-serif-4",
+});
 
 export const metadata: Metadata = {
   title: "SF Dashboard",
@@ -22,35 +31,26 @@ export default async function RootLayout({
     Promise.resolve(getSettings()),
   ]);
 
-  const cssVars = [
-    `:root {`,
-    `  --color-primary: ${settings.primaryColor};`,
-    `  --color-secondary: ${settings.secondaryColor};`,
-    `  --color-accent: ${settings.accentColor};`,
-    `  --border-radius: ${settings.borderRadius}px;`,
-    `  --font-heading: '${settings.headingFont}', ui-sans-serif, system-ui, sans-serif;`,
-    `  --font-body: '${settings.bodyFont}', ui-sans-serif, system-ui, sans-serif;`,
-    `}`,
-  ].join("\n");
+  const overrides = [
+    `--color-accent: ${settings.accentColor};`,
+    `--color-accent-on-dark: ${brandAccentForDarkMode(settings.accentColor)};`,
+    `--color-accent-foreground: ${brandForegroundOn(settings.accentColor)};`,
+  ].join("\n  ");
 
-  // Deduplicated Google Fonts URLs
-  const fontUrls = [...new Set([settings.headingFontUrl, settings.bodyFontUrl].filter((u): u is string => !!u))];
+  const cssVars = `:root {\n  ${overrides}\n}`;
 
   return (
-    <html lang="en">
+    <html lang="en" className={`${inter.variable} ${sourceSerif4.variable}`}>
       <head>
-        <style dangerouslySetInnerHTML={{ __html: cssVars }} />
-        {fontUrls.map((href) => (
-          <link key={href} rel="stylesheet" href={href} />
-        ))}
+        {cssVars && <style dangerouslySetInnerHTML={{ __html: cssVars }} />}
       </head>
-      <body className={`${inter.className} antialiased`}>
+      <body className="antialiased">
+        <ThemeProvider />
         <AppShell
           displayName={session.displayName}
           instanceUrl={session.instanceUrl}
           appName={settings.appName}
           logoBase64={settings.logoBase64}
-          sidebarStyle={settings.sidebarStyle}
         >
           {children}
         </AppShell>

@@ -486,7 +486,6 @@ async function analyzeWithAI(logoBase64: string | null, html: string): Promise<A
     }
 
     const text = response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
-    console.log("AI brand analysis response:", text.slice(0, 200));
 
     // Try to parse JSON directly
     let parsed: Record<string, unknown>;
@@ -546,7 +545,6 @@ export async function extractBrand(inputUrl: string): Promise<BrandResult> {
 
   // Meta theme-color is the most explicit brand signal
   const themeColor = extractMetaThemeColor(html);
-  console.log("Meta theme-color:", themeColor);
 
   // Style tags
   const styleTagTexts: string[] = [];
@@ -555,18 +553,15 @@ export async function extractBrand(inputUrl: string): Promise<BrandResult> {
   }
   const styleTagCss = styleTagTexts.join("\n");
   const styleColors = extractColorsFromText(styleTagCss);
-  console.log("Colors from style tags:", styleColors.size);
 
   // Linked stylesheets (up to 3)
   const sheetUrls = extractStylesheetUrls(html, baseUrl);
   const sheetTexts = (await Promise.all(sheetUrls.map(u => fetchText(u, 6_000)))).filter((t): t is string => t !== null);
   const sheetCss = sheetTexts.join("\n");
   const sheetColors = extractColorsFromText(sheetCss);
-  console.log("Colors from stylesheets:", sheetColors.size);
 
   // Inline style attributes
   const inlineColors = extractInlineStyleColors(html);
-  console.log("Colors from inline styles:", inlineColors.size);
 
   // Fonts (needs combined CSS)
   const fullCss = [styleTagCss, sheetCss].join("\n");
@@ -621,11 +616,8 @@ export async function extractBrand(inputUrl: string): Promise<BrandResult> {
     allFreq.set(themeColor, (allFreq.get(themeColor) ?? 0) + 20);
   }
 
-  console.log("All colors found:", allFreq.size);
-
   const ranked = groupAndRankColors(allFreq);
   const cssColors = ranked.slice(0, 5);
-  console.log("Filtered brand colors (CSS):", cssColors);
 
   // ── AI analysis (always runs to supplement CSS, but CSS vars/theme-color take priority) ──
   const aiResult = await analyzeWithAI(logo, html);
@@ -636,7 +628,6 @@ export async function extractBrand(inputUrl: string): Promise<BrandResult> {
 
   if (aiResult) {
     aiAnalyzed = true;
-    console.log("AI analysis result:", aiResult);
     const aiHexes = [
       aiResult.primary,
       aiResult.secondary,

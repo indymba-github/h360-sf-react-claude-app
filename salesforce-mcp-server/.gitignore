@@ -12,3 +12,4 @@ server.key
 
 # macOS
 .DS_Store
+.env.local

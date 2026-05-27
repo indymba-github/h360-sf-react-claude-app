@@ -1,0 +1,32 @@
+# Salesforce JWT key pair — generate with salesforce-mcp-server/scripts/generate-cert.sh
+*.key
+*.crt
+*.pem
+*.p12
+*.pfx
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Salesforce CLI metadata
+.sf/
+.sfdx/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Personal / internal files (not for any commit)
+CLAUDE.MD
+get-mcp-token.sh
+sf-mcp-dashboard-blueprint.md
+wiki/
+.claude/

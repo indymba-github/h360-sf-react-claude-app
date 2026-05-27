@@ -12,25 +12,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
 
-  // Validate hex colors if provided
   const hexRe = /^#[0-9a-fA-F]{6}$/;
-  if (body.primaryColor && !hexRe.test(body.primaryColor)) {
-    return NextResponse.json({ error: "Invalid primaryColor — must be a 6-digit hex (e.g. #2D5BFF)" }, { status: 400 });
-  }
-  if (body.secondaryColor && !hexRe.test(body.secondaryColor)) {
-    return NextResponse.json({ error: "Invalid secondaryColor" }, { status: 400 });
-  }
   if (body.accentColor && !hexRe.test(body.accentColor)) {
-    return NextResponse.json({ error: "Invalid accentColor" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid accentColor — must be a 6-digit hex (e.g. #946F1F)" }, { status: 400 });
+  }
+  if (body.inkColor && !hexRe.test(body.inkColor)) {
+    return NextResponse.json({ error: "Invalid inkColor — must be a 6-digit hex" }, { status: 400 });
   }
   if (body.appName && body.appName.length > 30) {
     return NextResponse.json({ error: "appName must be 30 characters or fewer" }, { status: 400 });
-  }
-  if (body.borderRadius !== undefined && (body.borderRadius < 0 || body.borderRadius > 16)) {
-    return NextResponse.json({ error: "borderRadius must be 0–16" }, { status: 400 });
-  }
-  if (body.sidebarStyle && !["dark", "light"].includes(body.sidebarStyle)) {
-    return NextResponse.json({ error: "sidebarStyle must be 'dark' or 'light'" }, { status: 400 });
   }
 
   const updated = saveSettings(body);

@@ -1,215 +1,398 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { getEffectiveMcpMode } from "@/lib/mcp-config";
-import {
-  getPipelineSummary,
-  getTopAccountsByRevenue,
-  getRecentActivity,
-  getWinLossStats,
-} from "@/lib/salesforce";
+import { sfQuery, getNewsAlerts, getPipelineSummary } from "@/lib/salesforce";
+import { formatCurrency, formatCount } from "@/lib/format";
+import { timeOfDayGreeting } from "@/lib/greeting";
 import ChatPanel from "@/components/ChatPanel";
-import PipelineChart from "@/components/PipelineChart";
+import PageHeading from "@/components/PageHeading";
+import SectionHeader from "@/components/SectionHeader";
+import dynamic from "next/dynamic";
+import type { SFTask, SFPipelineStage } from "@/lib/salesforce";
+import type { AgendaItem } from "@/components/TodaysAgenda";
+import type { AgingOpportunity } from "@/components/AgingPipelineChart";
+import type { ForecastBucket } from "@/components/ForecastChart";
 
-function formatCurrency(value: number | null): string {
-  if (value == null) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    notation: "compact",
-    maximumFractionDigits: 1,
-  }).format(value);
+const PipelineChart       = dynamic(() => import("@/components/PipelineChart"),       { ssr: false });
+const ForecastChart       = dynamic(() => import("@/components/ForecastChart"),       { ssr: false });
+const AgingPipelineChart  = dynamic(() => import("@/components/AgingPipelineChart"),  { ssr: false });
+const NewsAlertsSection   = dynamic(() => import("@/components/NewsAlertsSection"),   { ssr: false });
+const TodaysAgenda        = dynamic(() => import("@/components/TodaysAgenda"),        { ssr: false });
+const ClickableSignalCard = dynamic(() => import("@/components/ClickableSignalCard"), { ssr: false });
+
+// ── Types ──────────────────────────────────────────────────────────────────
+
+interface PipelineRollup {
+  totalOpen: number | null;
+  totalOpenAmount: number | null;
 }
 
-function formatDate(value: string): string {
-  return new Date(value).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+interface RecentAccount {
+  Id: string;
+  Name: string;
+  LastModifiedDate: string;
+  Industry: string | null;
 }
 
-function KpiCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+interface HighPriorityCase {
+  Id: string;
+  Subject: string | null;
+  Priority: string;
+  Status: string;
+  Account: { Id: string; Name: string } | null;
+  CreatedDate: string;
+}
+
+interface AccountCountRow {
+  total: number | null;
+}
+
+interface WinLossRow {
+  StageName: string;
+  cnt: number;
+}
+
+interface AgingOppRow {
+  Id: string;
+  Name: string;
+  StageName: string;
+  Amount: number | null;
+  AccountId: string | null;
+  CloseDate: string | null;
+  LastModifiedDate: string;
+}
+
+interface SFEvent {
+  Id: string;
+  Subject: string | null;
+  ActivityDateTime: string | null;
+  EndDateTime: string | null;
+  IsAllDayEvent: boolean;
+  WhoId: string | null;
+  Who: { Name: string } | null;
+  WhatId: string | null;
+  What: { Name: string } | null;
+}
+
+interface SFTaskItem {
+  Id: string;
+  Subject: string | null;
+  ActivityDate: string | null;
+  Status: string;
+  Priority: string | null;
+  WhoId: string | null;
+  Who: { Name: string } | null;
+  WhatId: string | null;
+  What: { Name: string } | null;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function countModifiedThisWeek(accounts: RecentAccount[]): number {
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  return accounts.filter((a) => new Date(a.LastModifiedDate).getTime() > weekAgo).length;
+}
+
+function buildForecastBuckets(opps: AgingOppRow[]): ForecastBucket[] {
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const endOfMonth   = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const startOfNext  = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const endOfNext    = new Date(now.getFullYear(), now.getMonth() + 2, 0);
+  const plus30       = new Date(now.getTime() + 30 * 86400000);
+  const plus60       = new Date(now.getTime() + 60 * 86400000);
+
+  const buckets: ForecastBucket[] = [
+    { label: "This month", range: `${startOfMonth.toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${endOfMonth.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, amount: 0, count: 0 },
+    { label: "Next month", range: `${startOfNext.toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${endOfNext.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, amount: 0, count: 0 },
+    { label: "60 days",    range: `${plus30.toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${plus60.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, amount: 0, count: 0 },
+    { label: "90+ days",   range: `Beyond ${plus60.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, amount: 0, count: 0 },
+  ];
+
+  for (const opp of opps) {
+    if (!opp.CloseDate) continue;
+    const d = new Date(opp.CloseDate);
+    const amt = opp.Amount ?? 0;
+    if (d >= startOfMonth && d <= endOfMonth)     { buckets[0].amount += amt; buckets[0].count++; }
+    else if (d >= startOfNext && d <= endOfNext)  { buckets[1].amount += amt; buckets[1].count++; }
+    else if (d > plus30 && d <= plus60)           { buckets[2].amount += amt; buckets[2].count++; }
+    else if (d > plus60)                          { buckets[3].amount += amt; buckets[3].count++; }
+  }
+  return buckets;
+}
+
+function buildAgingOpps(opps: AgingOppRow[]): AgingOpportunity[] {
+  const now = Date.now();
+  return opps
+    .map(o => ({
+      id: o.Id,
+      accountId: o.AccountId,
+      name: o.Name,
+      stageName: o.StageName,
+      amount: o.Amount,
+      daysStalled: Math.floor((now - new Date(o.LastModifiedDate).getTime()) / 86400000),
+    }))
+    .sort((a, b) => b.daysStalled - a.daysStalled)
+    .slice(0, 10);
+}
+
+function buildAgendaItems(tasks: SFTaskItem[], events: SFEvent[]): AgendaItem[] {
+  const timedEvents: AgendaItem[] = events
+    .filter(e => !e.IsAllDayEvent && e.ActivityDateTime)
+    .map(e => ({
+      id: e.Id, type: "event" as const,
+      subject: e.Subject ?? "(no subject)",
+      startTime: e.ActivityDateTime,
+      endTime: e.EndDateTime,
+      isAllDay: false,
+      whoName: e.Who?.Name ?? null,
+      whatName: e.What?.Name ?? null,
+      whatId: e.WhatId,
+    }))
+    .sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
+
+  const allDayEvents: AgendaItem[] = events
+    .filter(e => e.IsAllDayEvent)
+    .map(e => ({
+      id: e.Id, type: "event" as const,
+      subject: e.Subject ?? "(no subject)",
+      startTime: null, endTime: null, isAllDay: true,
+      whoName: e.Who?.Name ?? null,
+      whatName: e.What?.Name ?? null,
+      whatId: e.WhatId,
+    }));
+
+  const taskItems: AgendaItem[] = tasks.map(t => ({
+    id: t.Id, type: "task" as const,
+    subject: t.Subject ?? "(no subject)",
+    whoName: t.Who?.Name ?? null,
+    whatName: t.What?.Name ?? null,
+    whatId: t.WhatId,
+    priority: t.Priority,
+  }));
+
+  return [...timedEvents, ...allDayEvents, ...taskItems];
+}
+
+// ── KPI card ───────────────────────────────────────────────────────────────
+
+function KpiCard({ marker, label, value }: { marker: string; label: string; value: string }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5">
-      <p className="text-xs font-medium uppercase tracking-wide" style={{ color: "var(--color-secondary)" }}>{label}</p>
-      <p className="mt-2 text-3xl font-bold text-gray-900 tabular-nums">{value}</p>
-      {sub && <p className="mt-1 text-xs text-gray-400">{sub}</p>}
+    <div
+      className="p-[11px_13px]"
+      style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}
+    >
+      <div className="flex items-baseline justify-between mb-2">
+        <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--color-ink-soft)" }}>
+          {label}
+        </p>
+        <span style={{ fontFamily: "var(--font-body)", fontSize: "9px", color: "var(--color-ink-soft)" }}>
+          {marker}
+        </span>
+      </div>
+      <p style={{ fontFamily: "var(--font-display)", fontSize: "24px", fontWeight: 500, color: "var(--color-ink)", lineHeight: 1 } as React.CSSProperties}>
+        {value}
+      </p>
     </div>
   );
 }
 
+// ── Page ───────────────────────────────────────────────────────────────────
+
 export default async function DashboardPage() {
   const session = await getSession();
-  if (!session.accessToken || !session.instanceUrl) {
-    redirect("/");
-  }
+  if (!session.accessToken || !session.instanceUrl) redirect("/");
 
   const effectiveMcpMode = getEffectiveMcpMode(session.mcpMode);
-  const needsMcpAuth = effectiveMcpMode === "hosted" && !session.mcpAccessToken;
+  const userId = (session.userId ?? "").replace(/['"\\]/g, "");
 
-  const [pipelineRes, topAccountsRes, recentRes, winLossRes] = await Promise.allSettled([
+  const [
+    pipelineRes, recentRes, casesRes, accountCountRes, winLossRes,
+    newsRes, pipelineStagesRes, agingOppsRes, eventsRes, tasksRes,
+  ] = await Promise.allSettled([
+    sfQuery<PipelineRollup>(session.instanceUrl, session.accessToken,
+      `SELECT COUNT(Id) totalOpen, SUM(Amount) totalOpenAmount FROM Opportunity WHERE IsClosed = false AND OwnerId = '${userId}'`),
+    sfQuery<RecentAccount>(session.instanceUrl, session.accessToken,
+      `SELECT Id, Name, LastModifiedDate, Industry FROM Account WHERE OwnerId = '${userId}' ORDER BY LastModifiedDate DESC NULLS LAST LIMIT 5`),
+    sfQuery<HighPriorityCase>(session.instanceUrl, session.accessToken,
+      `SELECT Id, Subject, Priority, Status, Account.Id, Account.Name, CreatedDate FROM Case WHERE Status != 'Closed' AND Priority = 'High' ORDER BY CreatedDate DESC LIMIT 3`),
+    sfQuery<AccountCountRow>(session.instanceUrl, session.accessToken,
+      `SELECT COUNT(Id) total FROM Account WHERE OwnerId = '${userId}'`),
+    sfQuery<WinLossRow>(session.instanceUrl, session.accessToken,
+      `SELECT StageName, COUNT(Id) cnt FROM Opportunity WHERE IsClosed = true AND OwnerId = '${userId}' GROUP BY StageName`),
+    getNewsAlerts(session.instanceUrl, session.accessToken),
     getPipelineSummary(session.instanceUrl, session.accessToken),
-    getTopAccountsByRevenue(session.instanceUrl, session.accessToken, 5),
-    getRecentActivity(session.instanceUrl, session.accessToken),
-    getWinLossStats(session.instanceUrl, session.accessToken),
+    sfQuery<AgingOppRow>(session.instanceUrl, session.accessToken,
+      `SELECT Id, Name, StageName, Amount, AccountId, CloseDate, LastModifiedDate FROM Opportunity WHERE IsClosed = false AND OwnerId = '${userId}' ORDER BY LastModifiedDate ASC NULLS FIRST LIMIT 10`),
+    sfQuery<SFEvent>(session.instanceUrl, session.accessToken,
+      `SELECT Id, Subject, ActivityDateTime, EndDateTime, IsAllDayEvent, WhoId, Who.Name, WhatId, What.Name FROM Event WHERE OwnerId = '${userId}' AND ActivityDate = TODAY ORDER BY ActivityDateTime ASC NULLS LAST LIMIT 20`),
+    sfQuery<SFTaskItem>(session.instanceUrl, session.accessToken,
+      `SELECT Id, Subject, ActivityDate, Status, Priority, WhoId, Who.Name, WhatId, What.Name FROM Task WHERE OwnerId = '${userId}' AND ActivityDate = TODAY AND IsClosed = false ORDER BY Priority ASC NULLS LAST LIMIT 20`),
   ]);
 
-  const stages = pipelineRes.status === "fulfilled" ? pipelineRes.value : [];
-  const topAccounts = topAccountsRes.status === "fulfilled" ? topAccountsRes.value : [];
-  const recentItems = recentRes.status === "fulfilled" ? recentRes.value : [];
-  const winLoss = winLossRes.status === "fulfilled"
-    ? winLossRes.value
-    : { closedWon: 0, closedLost: 0, winRate: 0, avgDealSize: null };
+  const pipeline      = pipelineRes.status === "fulfilled" ? pipelineRes.value[0] : null;
+  const recent        = recentRes.status === "fulfilled" ? recentRes.value : [];
+  const cases         = casesRes.status === "fulfilled" ? casesRes.value : [];
+  const accountCount  = accountCountRes.status === "fulfilled" ? (accountCountRes.value[0]?.total ?? 0) : 0;
+  const winLossRows   = winLossRes.status === "fulfilled" ? winLossRes.value : [];
+  const newsAlerts    = newsRes.status === "fulfilled" ? newsRes.value : [];
+  const pipelineStages = pipelineStagesRes.status === "fulfilled" ? pipelineStagesRes.value : [];
+  const agingOppRows  = agingOppsRes.status === "fulfilled" ? agingOppsRes.value : [];
+  const events        = eventsRes.status === "fulfilled" ? eventsRes.value : [];
+  const tasks         = tasksRes.status === "fulfilled" ? tasksRes.value : [];
 
-  const totalPipeline = stages.reduce((sum, s) => sum + (s.totalAmt ?? 0), 0);
-  const totalOpenOpps = stages.reduce((sum, s) => sum + s.cnt, 0);
+  const won      = winLossRows.find(r => r.StageName === "Closed Won")?.cnt ?? 0;
+  const lost     = winLossRows.find(r => r.StageName === "Closed Lost")?.cnt ?? 0;
+  const winRate  = won + lost > 0 ? Math.round((won / (won + lost)) * 100) : null;
+
+  const modifiedThisWeek = countModifiedThisWeek(recent);
+  const firstName  = session.displayName?.split(" ")[0] ?? "there";
+  const greeting   = timeOfDayGreeting();
+  const dateLabel  = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+
+  let subtitle = "Your pipeline is on track.";
+  const parts: string[] = [];
+  if (cases.length > 0) parts.push(`${cases.length} high-priority case${cases.length !== 1 ? "s" : ""} open`);
+  if (modifiedThisWeek > 0) parts.push(`${modifiedThisWeek} account${modifiedThisWeek !== 1 ? "s" : ""} modified this week`);
+  if (parts.length > 0) subtitle = parts.join(". ") + ".";
+
+  const signalMeta = `${cases.length} alert${cases.length !== 1 ? "s" : ""} · ${recent.length} update${recent.length !== 1 ? "s" : ""}`;
+  const forecastBuckets = buildForecastBuckets(agingOppRows as any);
+  const agingOpps = buildAgingOpps(agingOppRows);
+  const agendaItems = buildAgendaItems(tasks, events);
 
   return (
     <div className="flex h-full">
-      {/* Main content */}
-      <div className="flex-1 overflow-y-auto p-8 min-w-0">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-gray-900">
-            Good day, {session.displayName?.split(" ")[0] ?? "there"}
-          </h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Here&apos;s your pipeline at a glance.
-          </p>
-        </div>
+      {/* ── Main content ── */}
+      <div className="flex-1 overflow-y-auto min-w-0" style={{ background: "var(--color-paper)" }}>
+        <div className="px-8 pt-8 pb-12">
 
-        {/* MCP connection banner */}
-        {needsMcpAuth && (
-          <div className="mb-6 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-5 py-4">
-            <div>
-              <p className="text-sm font-semibold text-amber-900">AI assistant not connected</p>
-              <p className="mt-0.5 text-xs text-amber-700">
-                Connect your Salesforce MCP access to enable the AI chat panel.
+          {/* Page heading */}
+          <div className="mb-8">
+            <PageHeading
+              categoryLabel={dateLabel}
+              headline={`${greeting}, ${firstName}.`}
+              italicWord={`${firstName}.`}
+              subtitle={subtitle}
+            />
+          </div>
+
+          {/* News Alerts (between heading and KPI grid) */}
+          {newsAlerts.length > 0 && (
+            <div className="mb-8">
+              <NewsAlertsSection initialAlerts={newsAlerts} variant="dashboard" />
+            </div>
+          )}
+
+          {/* KPI grid */}
+          <div className="grid gap-[6px] mb-10" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+            <KpiCard marker="01" label="Accounts"      value={formatCount(accountCount)} />
+            <KpiCard marker="02" label="Open pipeline" value={formatCurrency(pipeline?.totalOpenAmount ?? null)} />
+            <KpiCard marker="03" label="Open deals"    value={formatCount(pipeline?.totalOpen ?? null)} />
+            <KpiCard marker="04" label="Win rate"      value={winRate !== null ? `${winRate}%` : "—"} />
+          </div>
+
+          {/* ── 01 Pipeline view ── */}
+          <div className="mb-10">
+            <div className="mb-4">
+              <SectionHeader number="01" title="Pipeline view" />
+            </div>
+
+            {/* Row 1: Pipeline by Stage — full width */}
+            <div className="mb-4" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)", padding: "16px 20px" }}>
+              <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-ink-soft)", marginBottom: 12 }}>
+                Pipeline by Stage
               </p>
+              <PipelineChart stages={pipelineStages} />
             </div>
-            <a
-              href="/api/auth/mcp-login"
-              className="ml-6 shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500 active:bg-amber-700 transition-colors"
-            >
-              Connect MCP
-            </a>
-          </div>
-        )}
 
-        {/* KPI cards */}
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4 mb-6">
-          <KpiCard
-            label="Open Pipeline"
-            value={formatCurrency(totalPipeline)}
-            sub={`${totalOpenOpps} open deal${totalOpenOpps !== 1 ? "s" : ""}`}
-          />
-          <KpiCard
-            label="Open Deals"
-            value={String(totalOpenOpps)}
-            sub={`${stages.length} stage${stages.length !== 1 ? "s" : ""}`}
-          />
-          <KpiCard
-            label="Win Rate"
-            value={`${winLoss.winRate}%`}
-            sub={`${winLoss.closedWon}W / ${winLoss.closedLost}L`}
-          />
-          <KpiCard
-            label="Avg Deal (Won)"
-            value={formatCurrency(winLoss.avgDealSize)}
-            sub="closed won"
-          />
-        </div>
-
-        {/* Chart + top accounts */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-          {/* Pipeline bar chart */}
-          <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-5">
-            <h2 className="text-sm font-semibold text-gray-900 mb-4">Pipeline by Stage</h2>
-            <PipelineChart stages={stages} />
+            {/* Row 2: Forecast + Aging side by side (stacks below 1200px) */}
+            <div style={{ display: "grid", gap: 4 }} className="pipeline-row-2" data-cols="2">
+              <div style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)", padding: "16px 20px" }}>
+                <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-ink-soft)", marginBottom: 12 }}>
+                  Forecast by Close Date
+                </p>
+                <ForecastChart buckets={forecastBuckets} />
+              </div>
+              <div style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)", padding: "16px 20px" }}>
+                <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-ink-soft)", marginBottom: 12 }}>
+                  Aging Pipeline
+                </p>
+                <AgingPipelineChart opportunities={agingOpps} instanceUrl={session.instanceUrl} />
+              </div>
+            </div>
           </div>
 
-          {/* Top accounts by revenue */}
-          <div className="bg-white rounded-xl border border-gray-200">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <h2 className="text-sm font-semibold text-gray-900">Top Accounts</h2>
-              <a href="/accounts" className="text-xs font-medium transition-colors" style={{ color: "var(--color-secondary)" }}>
-                View all →
-              </a>
+          {/* ── 02 Intelligence queue ── */}
+          <div className="mb-10">
+            <div className="mb-4">
+              <SectionHeader number="02" title="Intelligence queue" meta={signalMeta} />
             </div>
-            {topAccounts.length === 0 ? (
-              <div className="px-5 py-8 text-center text-xs text-gray-400">No data</div>
+
+            {cases.length === 0 && recent.length === 0 ? (
+              <div className="px-5 py-8 text-center" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
+                <p style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--color-ink-soft)" }}>
+                  No signals right now. Check back later.
+                </p>
+              </div>
             ) : (
-              <div className="divide-y divide-gray-100">
-                {topAccounts.map((a, i) => (
-                  <a
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {cases.map((c) => (
+                  <ClickableSignalCard
+                    key={c.Id}
+                    href={c.Account ? `/accounts/${c.Account.Id}` : "#"}
+                    variant="dark"
+                    category="High-priority case"
+                    timestamp={relativeTime(c.CreatedDate)}
+                    headline={c.Subject ?? "(no subject)"}
+                    body={[c.Account?.Name, c.Status].filter(Boolean).join(" · ")}
+                    accent
+                    sfRecordId={c.Id}
+                    instanceUrl={session.instanceUrl}
+                  />
+                ))}
+                {recent.map((a) => (
+                  <ClickableSignalCard
                     key={a.Id}
                     href={`/accounts/${a.Id}`}
-                    className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="text-xs font-medium text-gray-300 w-4 shrink-0">
-                        {i + 1}
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">{a.Name}</p>
-                        <p className="text-xs text-gray-400">{a.Industry ?? "—"}</p>
-                      </div>
-                    </div>
-                    <span className="text-sm font-semibold text-gray-700 shrink-0 ml-2">
-                      {formatCurrency(a.AnnualRevenue)}
-                    </span>
-                  </a>
+                    variant="light"
+                    category="Account update"
+                    timestamp={relativeTime(a.LastModifiedDate)}
+                    headline={a.Name}
+                    body={a.Industry ?? "Account"}
+                    meta={`Modified ${relativeTime(a.LastModifiedDate)}`}
+                    sfRecordId={a.Id}
+                    instanceUrl={session.instanceUrl}
+                  />
                 ))}
               </div>
             )}
           </div>
-        </div>
 
-        {/* Recent activity */}
-        <div className="bg-white rounded-xl border border-gray-200">
-          <div className="px-5 py-4 border-b border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-900">Recent Activity</h2>
-          </div>
-          {recentItems.length === 0 ? (
-            <div className="px-5 py-8 text-center text-xs text-gray-400">No recent activity</div>
-          ) : (
-            <div className="divide-y divide-gray-100">
-              {recentItems.map((item) => (
-                <a
-                  key={`${item.objectType}-${item.Id}`}
-                  href={item.objectType === "Account" ? `/accounts/${item.Id}` : "#"}
-                  className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-xs font-semibold"
-                      style={
-                        item.objectType === "Account"
-                          ? { background: "#eff6ff", color: "#2563eb" }
-                          : { background: "color-mix(in srgb, var(--color-secondary) 12%, white)", color: "var(--color-secondary)" }
-                      }
-                    >
-                      {item.objectType === "Account" ? "A" : "O"}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{item.Name}</p>
-                      <p className="text-xs text-gray-400">
-                        {item.objectType}{item.detail ? ` · ${item.detail}` : ""}
-                      </p>
-                    </div>
-                  </div>
-                  <span className="text-xs text-gray-400 shrink-0 ml-4">
-                    {formatDate(item.LastModifiedDate)}
-                  </span>
-                </a>
-              ))}
+          {/* ── 03 Today's agenda ── */}
+          <div>
+            <div className="mb-4">
+              <SectionHeader number="03" title="Today's agenda" />
             </div>
-          )}
+            <TodaysAgenda items={agendaItems} />
+          </div>
+
         </div>
       </div>
 
-      {/* AI chat panel */}
+      {/* ── AI chat panel ── */}
       <ChatPanel initialMcpMode={effectiveMcpMode} hasMcpToken={!!session.mcpAccessToken} />
     </div>
   );

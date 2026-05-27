@@ -90,7 +90,8 @@ export default function AccountSearch({
       <div className="flex flex-col sm:flex-row gap-3 mb-6">
         <div className="relative flex-1">
           <svg
-            className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none"
+            className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
+            style={{ color: "var(--color-ink-soft)" }}
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -103,14 +104,34 @@ export default function AccountSearch({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search accounts…"
-            className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder:text-gray-300"
+            style={{
+              width: "100%",
+              paddingLeft: "2.25rem",
+              paddingRight: "0.75rem",
+              paddingTop: "0.5rem",
+              paddingBottom: "0.5rem",
+              fontSize: "13px",
+              fontFamily: "var(--font-body)",
+              background: "var(--color-surface)",
+              color: "var(--color-ink)",
+              border: "0.5px solid var(--color-border)",
+              outline: "none",
+            }}
           />
         </div>
         {industries.length > 0 && (
           <select
             value={industry}
             onChange={(e) => setIndustry(e.target.value)}
-            className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700 bg-white"
+            style={{
+              fontSize: "13px",
+              fontFamily: "var(--font-body)",
+              background: "var(--color-surface)",
+              color: "var(--color-ink)",
+              border: "0.5px solid var(--color-border)",
+              padding: "0.5rem 0.75rem",
+              outline: "none",
+            }}
           >
             <option value="">All industries</option>
             {industries.map((ind) => (
@@ -120,7 +141,10 @@ export default function AccountSearch({
             ))}
           </select>
         )}
-        <p className="text-sm text-gray-400 self-center shrink-0">
+        <p
+          className="self-center shrink-0"
+          style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--color-ink-soft)" }}
+        >
           {query || industry
             ? `${filtered.length} of ${accounts.length} loaded`
             : `Showing ${accounts.length} of ${totalCount}`}
@@ -130,71 +154,30 @@ export default function AccountSearch({
       {/* Card grid */}
       {filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
-          <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center mb-3">
-            <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <div
+            className="w-10 h-10 flex items-center justify-center mb-3"
+            style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}
+          >
+            <svg
+              className="w-5 h-5"
+              style={{ color: "var(--color-ink-soft)" }}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.5}
+            >
               <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
             </svg>
           </div>
-          <p className="text-sm font-medium text-gray-600">No accounts found</p>
-          <p className="text-xs text-gray-400 mt-1">Try adjusting your search or filter.</p>
+          <p style={{ fontFamily: "var(--font-display)", fontSize: "13px", fontWeight: 500, color: "var(--color-ink)" }}>No accounts found</p>
+          <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)", marginTop: "4px" }}>Try adjusting your search or filter.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {filtered.map((a) => {
             const url = sfUrl(a.Id);
             return (
-              <div
-                key={a.Id}
-                className="bg-white rounded-xl border border-gray-200 p-5 hover:border-blue-200 hover:shadow-sm transition-all group"
-              >
-                <div className="flex items-start justify-between gap-2 mb-3">
-                  <a
-                    href={`/accounts/${a.Id}`}
-                    className="text-sm font-semibold text-gray-900 leading-snug line-clamp-2 hover:text-blue-600 transition-colors"
-                  >
-                    {a.Name}
-                  </a>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {a.Type && (
-                      <span
-                        className="text-xs px-1.5 py-0.5 rounded font-medium"
-                        style={{ background: "color-mix(in srgb, var(--color-secondary) 12%, white)", color: "var(--color-secondary)" }}
-                      >
-                        {a.Type}
-                      </span>
-                    )}
-                    {url && (
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="View in Salesforce"
-                        className="text-gray-300 hover:text-blue-500 transition-colors opacity-0 group-hover:opacity-100"
-                      >
-                        <ExternalLinkIcon />
-                      </a>
-                    )}
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  {a.Industry && (
-                    <p className="text-xs text-gray-500">{a.Industry}</p>
-                  )}
-                  {(a.BillingCity || a.BillingState) && (
-                    <p className="text-xs text-gray-400">
-                      {[a.BillingCity, a.BillingState].filter(Boolean).join(", ")}
-                    </p>
-                  )}
-                </div>
-                <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-100">
-                  <span className="text-xs text-gray-400">
-                    {a.NumberOfEmployees ? `${a.NumberOfEmployees.toLocaleString()} emp.` : ""}
-                  </span>
-                  <span className="text-sm font-semibold text-gray-800">
-                    {formatCurrency(a.AnnualRevenue)}
-                  </span>
-                </div>
-              </div>
+              <AccountCard key={a.Id} account={a} url={url} />
             );
           })}
         </div>
@@ -203,16 +186,124 @@ export default function AccountSearch({
       {/* Load More */}
       {!allLoaded && (
         <div className="mt-8 flex flex-col items-center gap-2">
-          {error && <p className="text-xs text-red-500">{error}</p>}
+          {error && (
+            <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-danger)" }}>{error}</p>
+          )}
           <button
             onClick={loadMore}
             disabled={loading}
-            className="px-5 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:border-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            style={{
+              padding: "8px 20px",
+              fontFamily: "var(--font-body)",
+              fontSize: "12px",
+              color: "var(--color-ink)",
+              background: "var(--color-surface)",
+              border: "0.5px solid var(--color-border)",
+              cursor: loading ? "not-allowed" : "pointer",
+              opacity: loading ? 0.5 : 1,
+              transition: "opacity 120ms",
+            }}
           >
             {loading ? "Loading…" : `Load more (${totalCount - accounts.length} remaining)`}
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function AccountCard({ account: a, url }: { account: SFAccount; url: string | null }) {
+  const [hovered, setHovered] = useState(false);
+  const [linkHovered, setLinkHovered] = useState(false);
+  const [sfHovered, setSfHovered] = useState(false);
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        background: "var(--color-surface)",
+        border: `0.5px solid ${hovered ? "color-mix(in srgb, var(--color-accent) 40%, var(--color-border))" : "var(--color-border)"}`,
+        padding: "20px",
+        transition: "border-color 150ms",
+      }}
+    >
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <a
+          href={`/accounts/${a.Id}`}
+          onMouseEnter={() => setLinkHovered(true)}
+          onMouseLeave={() => setLinkHovered(false)}
+          style={{
+            fontFamily: "var(--font-display)",
+            fontSize: "13px",
+            fontWeight: 500,
+            color: linkHovered ? "var(--color-accent-text)" : "var(--color-ink)",
+            textDecoration: "none",
+            lineHeight: 1.35,
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+            transition: "color 120ms",
+          }}
+        >
+          {a.Name}
+        </a>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {a.Type && (
+            <span
+              style={{
+                fontFamily: "var(--font-body)",
+                fontSize: "9px",
+                padding: "2px 6px",
+                background: "color-mix(in srgb, var(--color-accent) 8%, var(--color-surface))",
+                color: "var(--color-accent-text)",
+                border: "0.5px solid color-mix(in srgb, var(--color-accent) 20%, var(--color-border))",
+              }}
+            >
+              {a.Type}
+            </span>
+          )}
+          {url && (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="View in Salesforce"
+              onMouseEnter={() => setSfHovered(true)}
+              onMouseLeave={() => setSfHovered(false)}
+              style={{
+                color: "var(--color-ink-soft)",
+                opacity: hovered ? (sfHovered ? 1 : 0.7) : 0,
+                transition: "opacity 150ms, color 120ms",
+              }}
+            >
+              <ExternalLinkIcon />
+            </a>
+          )}
+        </div>
+      </div>
+      <div className="space-y-1">
+        {a.Industry && (
+          <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-muted)" }}>{a.Industry}</p>
+        )}
+        {(a.BillingCity || a.BillingState) && (
+          <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)" }}>
+            {[a.BillingCity, a.BillingState].filter(Boolean).join(", ")}
+          </p>
+        )}
+      </div>
+      <div
+        className="flex items-center justify-between mt-4 pt-3"
+        style={{ borderTop: "0.5px solid var(--color-border)" }}
+      >
+        <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)" }}>
+          {a.NumberOfEmployees ? `${a.NumberOfEmployees.toLocaleString()} emp.` : ""}
+        </span>
+        <span style={{ fontFamily: "var(--font-display)", fontSize: "13px", fontWeight: 500, color: "var(--color-ink)" }}>
+          {formatCurrency(a.AnnualRevenue)}
+        </span>
+      </div>
     </div>
   );
 }

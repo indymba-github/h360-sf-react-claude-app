@@ -4,7 +4,7 @@ import { getIronSession } from "iron-session";
 import { type SessionData, sessionOptions } from "@/lib/session-config";
 import { PROACTIVE_REFRESH_THRESHOLD_MS } from "@/lib/token-refresh";
 
-const PROTECTED_PREFIXES = ["/dashboard", "/accounts"];
+const PROTECTED_PREFIXES = ["/dashboard", "/accounts", "/settings"];
 
 interface SFTokenResponse {
   access_token: string;
@@ -87,5 +87,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/accounts/:path*"],
+  matcher: ["/dashboard/:path*", "/accounts/:path*", "/settings/:path*"],
 };

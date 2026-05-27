@@ -1,11 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 
 function base64url(buf: Buffer): string {
   return buf.toString("base64url");
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   // CSRF state
   const state = crypto.randomBytes(16).toString("hex");
 

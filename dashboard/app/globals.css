@@ -2,6 +2,86 @@
 @tailwind components;
 @tailwind utilities;
 
+:root,
+[data-theme="light"] {
+  /* Palette */
+  --color-paper:        #F4F1EA;
+  --color-paper-bright: #F4F1EA;   /* always-cream: used for text on always-dark surfaces */
+  --color-surface:      #FCFAF5;
+  --color-ink:          #1B1F2A;
+  --color-ink-deep:     #1B1F2A;   /* darker variant of ink, used for header bar (overridden per-preset) */
+  --color-ink-muted:    #5A5D67;
+  --color-ink-soft:     #8A8D95;
+  --color-border:       #E5E0D5;
+  --color-accent:       #946F1F;
+  --color-accent-soft:  #C7A968;
+  /* --color-accent-on-dark and --color-accent-foreground are set at runtime by applyAccentTokens() */
+  --color-accent-on-dark:    #C7A968;
+  --color-accent-foreground: #F4F1EA;  /* text/icon on top of brand-colored surfaces */
+  /* Text token: resolves to accent in light mode, lifted variant in dark mode */
+  --color-accent-text:  var(--color-accent);
+  --color-success:      #2D6A4F;
+  --color-warning:      #A06800;
+  --color-danger:       #8B2F2F;
+  --color-stall:        #C84A3F;   /* aging chart — most stalled */
+  --color-stall-soft:   #E8847A;   /* aging chart — least stalled */
+
+  /* Typography — CSS var fonts wired from next/font variables on <html> */
+  --font-display: var(--loaded-source-serif-4), Georgia, ui-serif, serif;
+  --font-body:    var(--loaded-inter), system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, monospace;
+}
+
+.pipeline-row-2 {
+  grid-template-columns: 2fr 3fr;
+}
+
+@media (max-width: 1100px) {
+  .pipeline-row-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+@keyframes micRing {
+  0%   { transform: scale(1);   opacity: 0.8; }
+  100% { transform: scale(1.6); opacity: 0;   }
+}
+
+@keyframes toolPulse {
+  0%, 100% { transform: scale(1);    opacity: 0.8; }
+  50%       { transform: scale(1.2); opacity: 1;   }
+}
+
+@keyframes toolShimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%);  }
+}
+
+html,
 body {
-  background: #f9fafb;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  height: 100%;
+  overflow: hidden;
+}
+
+[data-theme="dark"] {
+  --color-paper:        #1B1F2A;
+  --color-paper-bright: #F4F1EA;   /* stays cream in dark mode — for text on always-dark surfaces */
+  --color-surface:      #252A35;
+  --color-ink:          #F4F1EA;
+  --color-ink-deep:     #0F1218;   /* dark mode default for ink-deep, used for header bar (overridden per-preset) */
+  --color-ink-muted:    #B0B3BA;
+  --color-ink-soft:     #9CA0AB;   /* lifted further for WCAG AA at small sizes on dark surface */
+  --color-border:       #3A3F4A;
+  --color-accent:       #C7A968;
+  --color-accent-soft:  #946F1F;
+  /* In dark mode, text uses the runtime-computed lifted variant for readability */
+  --color-accent-text:  var(--color-accent-on-dark);
+  --color-success:      #52B788;
+  --color-warning:      #D4A017;
+  --color-danger:       #E57373;
+  --color-stall:        #D85A50;
+  --color-stall-soft:   #F09A92;
 }

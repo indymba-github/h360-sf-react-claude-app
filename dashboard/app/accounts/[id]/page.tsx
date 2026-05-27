@@ -1,86 +1,60 @@
 import { redirect, notFound } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { getEffectiveMcpMode } from "@/lib/mcp-config";
-import {
-  getAccount,
-  getAccountOpportunities,
-  getAccountContacts,
-  getAccountCases,
-  getFinancialAccounts,
-  getFinancialAccountRoles,
-  getAccountRelationships,
-  type SFFinancialAccount,
-  type SFFinancialAccountRole,
-  type SFAccountRelationship,
-} from "@/lib/salesforce";
+import { sfQuery, getAccount, getNewsAlerts, type SFOpportunity, type SFContact, type SFCase } from "@/lib/salesforce";
+import { formatCurrency, formatCount } from "@/lib/format";
 import ChatPanel from "@/components/ChatPanel";
+import PageHeading from "@/components/PageHeading";
+import SectionHeader from "@/components/SectionHeader";
+import dynamic from "next/dynamic";
 
-function formatCurrency(value: number | null): string {
-  if (value == null) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
-}
+const AccountBriefingPanel = dynamic(() => import("@/components/AccountBriefingPanel"), { ssr: false });
+const NewsAlertsSection    = dynamic(() => import("@/components/NewsAlertsSection"),    { ssr: false });
+const SalesforceLink       = dynamic(() => import("@/components/SalesforceLink"),       { ssr: false });
+
+// ── Helpers ────────────────────────────────────────────────────────────────
 
 function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
   return new Date(value).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }
 
-function maskAccountNumber(acctNum: string | null): string {
-  if (!acctNum) return "—";
-  return `•••• ${acctNum.slice(-4)}`;
+function stagePillStyle(stage: string): React.CSSProperties {
+  const s = stage.toLowerCase();
+  if (s.includes("closed won")) return { background: "color-mix(in srgb, var(--color-success) 10%, var(--color-surface))", color: "var(--color-success)", border: "0.5px solid color-mix(in srgb, var(--color-success) 25%, var(--color-border))" };
+  if (s.includes("closed")) return { background: "var(--color-paper)", color: "var(--color-ink-soft)", border: "0.5px solid var(--color-border)" };
+  return { background: "color-mix(in srgb, var(--color-accent) 8%, var(--color-surface))", color: "var(--color-accent-text)", border: "0.5px solid color-mix(in srgb, var(--color-accent) 20%, var(--color-border))" };
 }
 
-type BadgeStyle = { className: string; style?: React.CSSProperties };
-
-function caseStatusBadge(status: string): BadgeStyle {
-  switch (status) {
-    case "New": return { className: "bg-blue-50 text-blue-700" };
-    case "Working": return { className: "bg-yellow-50 text-yellow-700" };
-    case "Escalated": return { className: "bg-red-50 text-red-700" };
-    case "Closed": return {
-      className: "",
-      style: { background: "color-mix(in srgb, var(--color-secondary) 12%, white)", color: "var(--color-secondary)" },
-    };
-    default: return { className: "bg-gray-100 text-gray-600" };
-  }
+function casePriorityStyle(priority: string | null): React.CSSProperties {
+  if (priority === "High") return { background: "color-mix(in srgb, var(--color-danger) 8%, var(--color-surface))", color: "var(--color-danger)", border: "0.5px solid color-mix(in srgb, var(--color-danger) 20%, var(--color-border))" };
+  if (priority === "Medium") return { background: "color-mix(in srgb, var(--color-warning) 8%, var(--color-surface))", color: "var(--color-warning)", border: "0.5px solid color-mix(in srgb, var(--color-warning) 20%, var(--color-border))" };
+  return { background: "var(--color-paper)", color: "var(--color-ink-soft)", border: "0.5px solid var(--color-border)" };
 }
 
-function faStatusBadge(status: string | null): BadgeStyle {
-  if (status === "Open") return {
-    className: "",
-    style: { background: "color-mix(in srgb, var(--color-secondary) 12%, white)", color: "var(--color-secondary)" },
-  };
-  return { className: "bg-gray-100 text-gray-600" };
+function lastWord(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  return parts[parts.length - 1];
 }
 
-function isLoanType(recordTypeName: string | null): boolean {
-  if (!recordTypeName) return false;
-  const name = recordTypeName.toLowerCase();
-  return name.includes("loan") || name.includes("mortgage");
-}
-
-function Field({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div>
-      <dt className="text-xs font-medium text-gray-400 uppercase tracking-wide">{label}</dt>
-      <dd className="mt-1 text-sm text-gray-900">{value || "—"}</dd>
-    </div>
-  );
-}
-
-function ExternalLinkIcon() {
-  return (
-    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-    </svg>
-  );
+function headlineWithoutLastWord(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length <= 1) return "";
+  return parts.slice(0, -1).join(" ") + " ";
 }
 
 function EmptySection({ message }: { message: string }) {
   return (
-    <div className="px-5 py-8 text-center text-sm text-gray-400">{message}</div>
+    <div
+      className="px-5 py-8 text-center"
+      style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}
+    >
+      <p style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--color-ink-soft)" }}>{message}</p>
+    </div>
   );
 }
+
+// ── Page ───────────────────────────────────────────────────────────────────
 
 export default async function AccountDetailPage({
   params,
@@ -88,427 +62,293 @@ export default async function AccountDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const session = await getSession();
-  if (!session.accessToken || !session.instanceUrl) {
-    redirect("/");
-  }
+  if (!session.accessToken || !session.instanceUrl) redirect("/");
 
   const effectiveMcpMode = getEffectiveMcpMode(session.mcpMode);
   const { id } = await params;
+  const safeId = id.replace(/['"\\]/g, "");
 
-  const [account, opps, contacts, cases, financialAccountsResult, relationshipsResult] =
-    await Promise.allSettled([
-      getAccount(session.instanceUrl!, session.accessToken!, id),
-      getAccountOpportunities(session.instanceUrl!, session.accessToken!, id),
-      getAccountContacts(session.instanceUrl!, session.accessToken!, id),
-      getAccountCases(session.instanceUrl!, session.accessToken!, id),
-      getFinancialAccounts(session.instanceUrl!, session.accessToken!, id),
-      getAccountRelationships(session.instanceUrl!, session.accessToken!, id),
-    ]);
+  const [accountRes, oppsRes, contactsRes, casesRes, newsRes] = await Promise.allSettled([
+    getAccount(session.instanceUrl, session.accessToken, safeId),
+    sfQuery<SFOpportunity>(
+      session.instanceUrl, session.accessToken,
+      `SELECT Id, Name, StageName, Amount, CloseDate, Probability FROM Opportunity WHERE AccountId = '${safeId}' ORDER BY CloseDate DESC NULLS LAST`
+    ),
+    sfQuery<SFContact>(
+      session.instanceUrl, session.accessToken,
+      `SELECT Id, Name, Title, Email, Phone FROM Contact WHERE AccountId = '${safeId}'`
+    ),
+    sfQuery<SFCase>(
+      session.instanceUrl, session.accessToken,
+      `SELECT Id, CaseNumber, Subject, Status, Priority, CreatedDate FROM Case WHERE AccountId = '${safeId}' ORDER BY CreatedDate DESC LIMIT 5`
+    ),
+    getNewsAlerts(session.instanceUrl, session.accessToken, safeId),
+  ]);
 
-  // Redirect on session expiry (FSC functions catch all errors, so only check core queries)
-  for (const result of [account, opps, contacts, cases]) {
-    if (result.status === "rejected" && result.reason?.message === "SF_SESSION_EXPIRED") {
-      redirect("/api/auth/login");
-    }
-  }
-
-  const acct = account.status === "fulfilled" ? account.value : null;
+  const acct = accountRes.status === "fulfilled" ? accountRes.value : null;
   if (!acct) notFound();
 
-  const opportunities = opps.status === "fulfilled" ? opps.value : [];
-  const contactList = contacts.status === "fulfilled" ? contacts.value : [];
-  const caseList = cases.status === "fulfilled" ? cases.value : [];
-  const financialAccountList: SFFinancialAccount[] =
-    financialAccountsResult.status === "fulfilled" ? financialAccountsResult.value : [];
-  const relationshipList: SFAccountRelationship[] =
-    relationshipsResult.status === "fulfilled" ? relationshipsResult.value : [];
+  const opps       = oppsRes.status === "fulfilled" ? oppsRes.value : [];
+  const contacts   = contactsRes.status === "fulfilled" ? contactsRes.value : [];
+  const cases      = casesRes.status === "fulfilled" ? casesRes.value : [];
+  const newsAlerts = newsRes.status === "fulfilled" ? newsRes.value : [];
 
-  // Phase 2: fan out roles for each financial account
-  const rolesResults = await Promise.allSettled(
-    financialAccountList.map((fa) =>
-      getFinancialAccountRoles(session.instanceUrl!, session.accessToken!, fa.Id)
-    )
-  );
-  const rolesMap = new Map<string, SFFinancialAccountRole[]>();
-  financialAccountList.forEach((fa, i) => {
-    const result = rolesResults[i];
-    rolesMap.set(fa.Id, result.status === "fulfilled" ? result.value : []);
-  });
+  const openOpps   = opps.filter((o) => !o.StageName.toLowerCase().startsWith("closed"));
+  const openCases  = cases.filter((c) => c.Status !== "Closed");
+  const closedCases = cases.filter((c) => c.Status === "Closed");
+  const openOppsTotal = openOpps.reduce((s, o) => s + (o.Amount ?? 0), 0);
 
-  const sfRecordUrl = `${session.instanceUrl}/lightning/r/Account/${acct.Id}/view`;
+  // Headline: split last word for italic
+  const acctLastWord = lastWord(acct.Name);
+  const acctHeadlineStart = headlineWithoutLastWord(acct.Name);
+  const singleWord = !acctHeadlineStart.trim();
 
-  // Group financial accounts by record type
-  const faByType = new Map<string, SFFinancialAccount[]>();
-  for (const fa of financialAccountList) {
-    const type = fa.RecordType?.Name ?? "Other";
-    const existing = faByType.get(type) ?? [];
-    existing.push(fa);
-    faByType.set(type, existing);
-  }
+  // Category label parts
+  const since = acct.CreatedDate ? new Date(acct.CreatedDate).getFullYear() : null;
+  const catParts = [acct.Industry, acct.Type, since ? `Since ${since}` : null].filter(Boolean);
+  const categoryLabel = catParts.length > 0 ? catParts.join(" · ") : undefined;
+
+  // Hero stats — omit nulls
+  const heroStats: { label: string; value: string }[] = [];
+  if (acct.AnnualRevenue != null) heroStats.push({ label: "Revenue", value: formatCurrency(acct.AnnualRevenue) });
+  if (acct.NumberOfEmployees != null) heroStats.push({ label: "Employees", value: formatCount(acct.NumberOfEmployees) });
+  if (acct.BillingState || acct.BillingCity) heroStats.push({ label: "Region", value: [acct.BillingCity, acct.BillingState].filter(Boolean).join(", ") });
+  if (openOpps.length > 0) heroStats.push({ label: "Open opps", value: formatCount(openOpps.length) });
+
 
   return (
     <div className="flex h-full">
-      <div className="flex-1 overflow-y-auto p-6 md:p-8">
-        {/* Breadcrumb */}
-        <nav className="flex items-center gap-1.5 text-xs text-gray-400 mb-6">
-          <a href="/accounts" className="transition-colors" style={{ color: "var(--color-secondary)" }}>Accounts</a>
-          <span>/</span>
-          <span className="text-gray-700 font-medium truncate max-w-xs">{acct.Name}</span>
-        </nav>
+      {/* ── Main content ── */}
+      <div className="flex-1 overflow-y-auto min-w-0" style={{ background: "var(--color-paper)" }}>
+        <div className="px-8 pt-8 pb-12">
 
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{acct.Name}</h1>
-            <div className="flex items-center gap-2 mt-1">
-              {acct.Type && (
-                <span
-                  className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
-                  style={{ background: "color-mix(in srgb, var(--color-secondary) 12%, white)", color: "var(--color-secondary)" }}
-                >
-                  {acct.Type}
-                </span>
-              )}
-              {acct.Industry && (
-                <span className="text-sm text-gray-400">{acct.Industry}</span>
-              )}
-            </div>
-          </div>
-          <a
-            href={sfRecordUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 shrink-0 text-xs text-gray-500 hover:text-blue-600 border border-gray-200 hover:border-blue-300 rounded-lg px-3 py-1.5 transition-colors"
-          >
-            <ExternalLinkIcon />
-            View in Salesforce
-          </a>
-        </div>
+          {/* Breadcrumb */}
+          <nav className="flex items-center gap-1.5 mb-6" style={{ fontFamily: "var(--font-body)", fontSize: "11px" }}>
+            <a href="/accounts" style={{ color: "var(--color-accent-text)" }}>Accounts</a>
+            <span style={{ color: "var(--color-ink-soft)" }}>·</span>
+            <span style={{ color: "var(--color-ink-muted)" }} className="truncate max-w-xs">{acct.Name}</span>
+          </nav>
 
-        {/* Detail grid */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5 mb-6">
-          <h2 className="text-sm font-semibold text-gray-900 mb-4">Details</h2>
-          <dl className="grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-3">
-            <Field label="Revenue" value={formatCurrency(acct.AnnualRevenue)} />
-            <Field label="Employees" value={acct.NumberOfEmployees?.toLocaleString()} />
-            <Field label="Phone" value={acct.Phone} />
-            <Field
-              label="Website"
-              value={
-                acct.Website ? (
-                  <a href={acct.Website} className="text-blue-600 hover:underline" target="_blank" rel="noopener noreferrer">
-                    {acct.Website}
-                  </a>
-                ) : null
-              }
+          {/* Page heading */}
+          <div className="mb-3">
+            <PageHeading
+              categoryLabel={categoryLabel}
+              headline={singleWord ? acct.Name : `${acctHeadlineStart}${acctLastWord}.`}
+              italicWord={singleWord ? undefined : `${acctLastWord}.`}
             />
-            <Field label="Location" value={[acct.BillingCity, acct.BillingState].filter(Boolean).join(", ")} />
-            <Field label="Owner" value={acct.Owner?.Name} />
-            <Field label="Created" value={formatDate(acct.CreatedDate)} />
-            <Field label="Last Modified" value={formatDate(acct.LastModifiedDate)} />
-          </dl>
-          {acct.Description && (
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <dt className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-1">Description</dt>
-              <dd className="text-sm text-gray-700 whitespace-pre-line">{acct.Description.slice(0, 500)}</dd>
-            </div>
-          )}
-        </div>
-
-        {/* Opportunities */}
-        <div className="bg-white rounded-xl border border-gray-200 mb-6">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-900">
-              Opportunities{" "}
-              {opportunities.length > 0 && (
-                <span className="text-gray-400 font-normal">({opportunities.length})</span>
-              )}
-            </h2>
-            <a
-              href={`${sfRecordUrl}?ws=%2Flightning%2Fr%2FOpportunity%2FRelatedList%2FAccount%2F${acct.Id}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-gray-400 hover:text-blue-500 transition-colors flex items-center gap-1"
-              title="View in Salesforce"
-            >
-              <ExternalLinkIcon />
-            </a>
           </div>
-          {opportunities.length === 0 ? (
-            <EmptySection message="No opportunities found for this account." />
-          ) : (
-            <div className="divide-y divide-gray-100">
-              {opportunities.map((o) => (
-                <div key={o.Id} className="flex items-center justify-between px-5 py-3">
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{o.Name}</p>
-                    <p className="text-xs text-gray-400">
-                      {o.StageName} · Close {formatDate(o.CloseDate)}
-                      {o.Probability != null && ` · ${o.Probability}%`}
-                    </p>
-                  </div>
-                  <span className="text-sm font-medium text-gray-700">{formatCurrency(o.Amount)}</span>
+
+          <div className="mb-6">
+            <SalesforceLink instanceUrl={session.instanceUrl} recordId={acct.Id} variant="text" />
+          </div>
+
+          {/* Hero stats row */}
+          {heroStats.length > 0 && (
+            <div
+              className="flex gap-8 mb-6 pb-6"
+              style={{ borderBottom: "0.5px solid var(--color-border)" }}
+            >
+              {heroStats.map(({ label, value }) => (
+                <div key={label}>
+                  <p
+                    style={{
+                      fontFamily: "var(--font-body)",
+                      fontSize: "9px",
+                      letterSpacing: "0.14em",
+                      textTransform: "uppercase",
+                      color: "var(--color-ink-soft)",
+                      marginBottom: "2px",
+                    }}
+                  >
+                    {label}
+                  </p>
+                  <p
+                    style={{
+                      fontFamily: "var(--font-display)",
+                      fontSize: "14px",
+                      fontWeight: 500,
+                      color: "var(--color-ink)",
+                    }}
+                  >
+                    {value}
+                  </p>
                 </div>
               ))}
             </div>
           )}
-        </div>
 
-        {/* Contacts */}
-        <div className="bg-white rounded-xl border border-gray-200 mb-6">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-900">
-              Contacts{" "}
-              {contactList.length > 0 && (
-                <span className="text-gray-400 font-normal">({contactList.length})</span>
-              )}
-            </h2>
-            <a
-              href={`${session.instanceUrl}/lightning/r/Account/${acct.Id}/related/Contacts/view`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-gray-400 hover:text-blue-500 transition-colors flex items-center gap-1"
-              title="View in Salesforce"
-            >
-              <ExternalLinkIcon />
-            </a>
-          </div>
-          {contactList.length === 0 ? (
-            <EmptySection message="No contacts found for this account." />
-          ) : (
-            <div className="divide-y divide-gray-100">
-              {contactList.map((c) => (
-                <div key={c.Id} className="flex items-start justify-between px-5 py-3">
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{c.Name}</p>
-                    <p className="text-xs text-gray-400">
-                      {[c.Title, c.Department].filter(Boolean).join(" · ")}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    {c.Email && <p className="text-xs text-gray-500">{c.Email}</p>}
-                    {c.Phone && <p className="text-xs text-gray-400">{c.Phone}</p>}
-                  </div>
-                </div>
-              ))}
+          {/* Briefing chips */}
+          <AccountBriefingPanel accountId={acct.Id} accountName={acct.Name} />
+
+          {/* News Alerts (account-scoped) */}
+          {newsAlerts.length > 0 && (
+            <div className="mb-8">
+              <div className="mb-4">
+                <SectionHeader number="00" title="News" meta={`${newsAlerts.length} alert${newsAlerts.length !== 1 ? "s" : ""}`} />
+              </div>
+              <NewsAlertsSection initialAlerts={newsAlerts} variant="account" />
             </div>
           )}
-        </div>
 
-        {/* Cases */}
-        <div className="bg-white rounded-xl border border-gray-200 mb-6">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-900">
-              Cases{" "}
-              {caseList.length > 0 && (
-                <span className="text-gray-400 font-normal">({caseList.length})</span>
-              )}
-            </h2>
-            <a
-              href={`${session.instanceUrl}/lightning/r/Account/${acct.Id}/related/Cases/view`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-gray-400 hover:text-blue-500 transition-colors flex items-center gap-1"
-              title="View in Salesforce"
-            >
-              <ExternalLinkIcon />
-            </a>
-          </div>
-          {caseList.length === 0 ? (
-            <EmptySection message="No cases found for this account." />
-          ) : (
-            <div className="divide-y divide-gray-100">
-              {caseList.map((c) => (
-                <div key={c.Id} className="flex items-center justify-between px-5 py-3">
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">
-                      #{c.CaseNumber} {c.Subject ?? "(no subject)"}
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      {formatDate(c.CreatedDate)}
-                      {c.Contact?.Name && ` · ${c.Contact.Name}`}
-                      {c.Owner?.Name && ` · ${c.Owner.Name}`}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {c.Priority && (
-                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                        c.Priority === "High" ? "bg-red-50 text-red-700" :
-                        c.Priority === "Medium" ? "bg-yellow-50 text-yellow-700" :
-                        "bg-gray-100 text-gray-600"
-                      }`}>
-                        {c.Priority}
+          {/* 01 Pipeline */}
+          <div className="mb-8">
+            <div className="mb-4">
+              <SectionHeader
+                number="01"
+                title="Pipeline"
+                meta={openOpps.length > 0 ? `${formatCurrency(openOppsTotal)} across ${openOpps.length} opportunit${openOpps.length !== 1 ? "ies" : "y"}` : undefined}
+              />
+            </div>
+            {opps.length === 0 ? (
+              <EmptySection message="No open opportunities." />
+            ) : (
+              <div style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
+                {opps.map((o, i) => (
+                  <div
+                    key={o.Id}
+                    className="flex items-center justify-between px-5 py-3"
+                    style={{ borderBottom: i < opps.length - 1 ? "0.5px solid var(--color-border)" : "none" }}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span
+                        className="text-xs px-2 py-0.5 shrink-0"
+                        style={{ fontFamily: "var(--font-body)", fontSize: "9px", ...stagePillStyle(o.StageName) }}
+                      >
+                        {o.StageName}
                       </span>
+                      <div className="min-w-0">
+                        <p style={{ fontFamily: "var(--font-display)", fontSize: "13px", fontWeight: 500, color: "var(--color-ink)" }} className="truncate">
+                          {o.Name}
+                        </p>
+                        <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)" }}>
+                          Close {formatDate(o.CloseDate)}{o.Probability != null ? ` · ${o.Probability}%` : ""}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3" style={{ flexShrink: 0, marginLeft: "16px" }}>
+                      <span style={{ fontFamily: "var(--font-display)", fontSize: "13px", fontWeight: 500, color: "var(--color-ink)" }}>
+                        {formatCurrency(o.Amount)}
+                      </span>
+                      <SalesforceLink instanceUrl={session.instanceUrl} recordId={o.Id} variant="icon" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 02 Contacts */}
+          <div className="mb-8">
+            <div className="mb-4">
+              <SectionHeader
+                number="02"
+                title="Contacts"
+                meta={contacts.length > 0 ? `${contacts.length} on file` : undefined}
+              />
+            </div>
+            {contacts.length === 0 ? (
+              <EmptySection message="No contacts on this account — add one from Salesforce." />
+            ) : (
+              <div
+                className="grid grid-cols-1 gap-3"
+                style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}
+              >
+                {contacts.map((c) => (
+                  <div
+                    key={c.Id}
+                    style={{
+                      background: "var(--color-surface)",
+                      border: "0.5px solid var(--color-border)",
+                      padding: "11px 13px",
+                      position: "relative",
+                    }}
+                  >
+                    <div style={{ position: "absolute", top: "10px", right: "10px" }}>
+                      <SalesforceLink instanceUrl={session.instanceUrl} recordId={c.Id} variant="icon" />
+                    </div>
+                    <p style={{ fontFamily: "var(--font-display)", fontSize: "13px", fontWeight: 500, color: "var(--color-ink)", marginBottom: "2px" }}>
+                      {c.Name}
+                    </p>
+                    {(c.Title) && (
+                      <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-muted)", marginBottom: "6px" }}>
+                        {c.Title}
+                      </p>
                     )}
-                    {(() => { const b = caseStatusBadge(c.Status); return (
-                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${b.className}`} style={b.style}>
+                    {c.Email && (
+                      <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)" }}>
+                        {c.Email}
+                      </p>
+                    )}
+                    {c.Phone && (
+                      <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)" }}>
+                        {c.Phone}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 03 Cases */}
+          <div className="mb-8">
+            <div className="mb-4">
+              <SectionHeader
+                number="03"
+                title="Cases"
+                meta={cases.length > 0 ? `${openCases.length} open · ${closedCases.length} closed` : undefined}
+              />
+            </div>
+            {cases.length === 0 ? (
+              <EmptySection message="No cases on file." />
+            ) : (
+              <div style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
+                {cases.slice(0, 3).map((c, i) => (
+                  <div
+                    key={c.Id}
+                    className="flex items-center justify-between px-5 py-3"
+                    style={{ borderBottom: i < Math.min(cases.length, 3) - 1 ? "0.5px solid var(--color-border)" : "none" }}
+                  >
+                    <div>
+                      <p style={{ fontFamily: "var(--font-display)", fontSize: "13px", fontWeight: 500, color: "var(--color-ink)" }}>
+                        #{c.CaseNumber} {c.Subject ?? "(no subject)"}
+                      </p>
+                      <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)" }}>
+                        {formatDate(c.CreatedDate)}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 ml-4">
+                      {c.Priority && (
+                        <span
+                          style={{ fontFamily: "var(--font-body)", fontSize: "9px", padding: "2px 6px", ...casePriorityStyle(c.Priority) }}
+                        >
+                          {c.Priority}
+                        </span>
+                      )}
+                      <span
+                        style={{
+                          fontFamily: "var(--font-body)",
+                          fontSize: "9px",
+                          padding: "2px 6px",
+                          background: c.Status === "Closed" ? "var(--color-paper)" : "color-mix(in srgb, var(--color-accent) 8%, var(--color-surface))",
+                          color: c.Status === "Closed" ? "var(--color-ink-soft)" : "var(--color-accent-text)",
+                          border: "0.5px solid var(--color-border)",
+                        }}
+                      >
                         {c.Status}
                       </span>
-                    ); })()}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Financial Accounts */}
-        <div className="bg-white rounded-xl border border-gray-200 mb-6">
-          <div className="px-5 py-4 border-b border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-900">
-              Financial Accounts{" "}
-              {financialAccountList.length > 0 && (
-                <span className="text-gray-400 font-normal">({financialAccountList.length})</span>
-              )}
-            </h2>
-          </div>
-          {financialAccountList.length === 0 ? (
-            <EmptySection message="No financial accounts found." />
-          ) : (
-            <div className="px-5 py-4 space-y-6">
-              {Array.from(faByType.entries()).map(([type, accounts]) => (
-                <div key={type}>
-                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">{type}</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {accounts.map((fa) => {
-                      const roles = rolesMap.get(fa.Id) ?? [];
-                      const displayName = fa.FinServ__Nickname__c || fa.Name || "—";
-                      const loan = isLoanType(fa.RecordType?.Name ?? null);
-                      const rateLabel = fa.FinServ__APY__c != null ? "APY" : fa.FinServ__InterestRate__c != null ? "Rate" : null;
-                      const rateValue = fa.FinServ__APY__c ?? fa.FinServ__InterestRate__c;
-                      return (
-                        <div key={fa.Id} className="border border-gray-200 rounded-lg p-4">
-                          <div className="flex items-start justify-between gap-2 mb-3">
-                            <div>
-                              <p className="text-sm font-semibold text-gray-900">{displayName}</p>
-                              <p className="text-xs text-gray-400 mt-0.5">{maskAccountNumber(fa.FinServ__FinancialAccountNumber__c)}</p>
-                            </div>
-                            {(() => { const b = faStatusBadge(fa.FinServ__Status__c); return (
-                              <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded font-medium ${b.className}`} style={b.style}>
-                                {fa.FinServ__Status__c ?? "—"}
-                              </span>
-                            ); })()}
-                          </div>
-                          <p className="text-xl font-bold text-gray-900 mb-3">
-                            {formatCurrency(fa.FinServ__Balance__c)}
-                          </p>
-                          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs mb-3">
-                            {fa.FinServ__FinancialAccountType__c && (
-                              <>
-                                <dt className="text-gray-400">Type</dt>
-                                <dd className="text-gray-700">{fa.FinServ__FinancialAccountType__c}</dd>
-                              </>
-                            )}
-                            {rateLabel && rateValue != null && (
-                              <>
-                                <dt className="text-gray-400">{rateLabel}</dt>
-                                <dd className="text-gray-700">{(rateValue * 100).toFixed(2)}%</dd>
-                              </>
-                            )}
-                            {loan && fa.FinServ__LoanAmount__c != null && (
-                              <>
-                                <dt className="text-gray-400">Loan Amount</dt>
-                                <dd className="text-gray-700">{formatCurrency(fa.FinServ__LoanAmount__c)}</dd>
-                              </>
-                            )}
-                            {loan && fa.FinServ__PrincipalBalance__c != null && (
-                              <>
-                                <dt className="text-gray-400">Principal</dt>
-                                <dd className="text-gray-700">{formatCurrency(fa.FinServ__PrincipalBalance__c)}</dd>
-                              </>
-                            )}
-                            {loan && fa.FinServ__PaymentAmount__c != null && (
-                              <>
-                                <dt className="text-gray-400">Payment</dt>
-                                <dd className="text-gray-700">{formatCurrency(fa.FinServ__PaymentAmount__c)}</dd>
-                              </>
-                            )}
-                            {loan && fa.FinServ__PaymentDueDate__c && (
-                              <>
-                                <dt className="text-gray-400">Due Date</dt>
-                                <dd className="text-gray-700">{formatDate(fa.FinServ__PaymentDueDate__c)}</dd>
-                              </>
-                            )}
-                          </dl>
-                          {roles.length > 0 && (
-                            <details className="mt-2">
-                              <summary className="text-xs text-blue-600 cursor-pointer hover:text-blue-800 select-none">
-                                Show roles ({roles.length})
-                              </summary>
-                              <ul className="mt-2 space-y-1">
-                                {roles.map((role) => {
-                                  const personName =
-                                    role.FinServ__RelatedContact__r?.Name ??
-                                    role.FinServ__RelatedAccount__r?.Name ??
-                                    "—";
-                                  return (
-                                    <li key={role.Id} className="flex items-center gap-2 text-xs text-gray-600">
-                                      <span className="font-medium">{personName}</span>
-                                      {role.FinServ__Role__c && (
-                                        <span className="text-gray-400">· {role.FinServ__Role__c}</span>
-                                      )}
-                                    </li>
-                                  );
-                                })}
-                              </ul>
-                            </details>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Key Relationships */}
-        <div className="bg-white rounded-xl border border-gray-200 mb-6">
-          <div className="px-5 py-4 border-b border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-900">
-              Key Relationships{" "}
-              {relationshipList.length > 0 && (
-                <span className="text-gray-400 font-normal">({relationshipList.length})</span>
-              )}
-            </h2>
-          </div>
-          {relationshipList.length === 0 ? (
-            <EmptySection message="No relationships found." />
-          ) : (
-            <div className="divide-y divide-gray-100">
-              {relationshipList.map((rel) => {
-                const isSide1 = rel.FinServ__Account__c === acct.Id;
-                const otherName = isSide1
-                  ? rel.FinServ__RelatedAccount__r?.Name
-                  : rel.FinServ__Account__r?.Name;
-                const myRole = isSide1
-                  ? rel.FinServ__Role__r?.Name
-                  : rel.FinServ__InverseRelationship__r?.FinServ__Role__r?.Name;
-                const theirRole = isSide1
-                  ? rel.FinServ__InverseRelationship__r?.FinServ__Role__r?.Name
-                  : rel.FinServ__Role__r?.Name;
-                const rolesLabel = [myRole, theirRole].filter(Boolean).join(" / ");
-                return (
-                  <div key={rel.Id} className="flex items-start justify-between px-5 py-3">
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{otherName ?? "—"}</p>
-                      {rolesLabel && (
-                        <p className="text-xs text-gray-400">{rolesLabel}</p>
-                      )}
+                      <SalesforceLink instanceUrl={session.instanceUrl} recordId={c.Id} variant="icon" />
                     </div>
-                    {rel.FinServ__AssociationType__c && (
-                      <span className="text-xs text-gray-400 shrink-0 ml-4">{rel.FinServ__AssociationType__c}</span>
-                    )}
                   </div>
-                );
-              })}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+          </div>
+
         </div>
       </div>
 
-      {/* AI chat panel */}
+      {/* ── AI chat panel ── */}
       <ChatPanel
         accountContext={{
           accountId: acct.Id,

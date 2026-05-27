@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import NotificationBell from "./NotificationBell";
+import type { SFNotification } from "@/hooks/useNotificationPoller";
 
 interface SidebarProps {
   displayName?: string;
@@ -10,6 +12,10 @@ interface SidebarProps {
   logoBase64?: string | null;
   sidebarStyle?: "dark" | "light";
   onClose?: () => void;
+  notifAlerts?:     SFNotification[];
+  notifUnread?:     number;
+  onNotifMarkSeen?: () => void;
+  onNotifDismiss?:  (id: string) => void;
 }
 
 const NAV = [
@@ -43,7 +49,7 @@ const NAV = [
   },
 ];
 
-export default function Sidebar({ displayName, instanceUrl, appName, logoBase64, sidebarStyle = "dark", onClose }: SidebarProps) {
+export default function Sidebar({ displayName, instanceUrl, appName, logoBase64, sidebarStyle = "dark", onClose, notifAlerts, notifUnread, onNotifMarkSeen, onNotifDismiss }: SidebarProps) {
   const pathname = usePathname();
   const isLight = sidebarStyle === "light";
 
@@ -99,6 +105,14 @@ export default function Sidebar({ displayName, instanceUrl, appName, logoBase64,
           )}
         </div>
         <span className="text-sm font-semibold tracking-tight flex-1 truncate" style={{ color: nameCol }}>{label}</span>
+        {notifAlerts !== undefined && (
+          <NotificationBell
+            alerts={notifAlerts}
+            unreadCount={notifUnread ?? 0}
+            onMarkSeen={onNotifMarkSeen ?? (() => {})}
+            onDismiss={onNotifDismiss ?? (() => {})}
+          />
+        )}
         {onClose && (
           <button
             onClick={onClose}

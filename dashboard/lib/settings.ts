@@ -4,31 +4,19 @@ import path from "path";
 const SETTINGS_PATH = path.join(process.cwd(), ".settings.json");
 
 export interface AppSettings {
-  primaryColor: string;
-  secondaryColor: string;
+  /** Swappable per-customer accent — maps to --color-accent */
   accentColor: string;
+  /** Optional override for --color-ink (for very dark brand colors) */
+  inkColor: string | null;
   appName: string;
   logoBase64: string | null;
-  headingFont: string;
-  bodyFont: string;
-  headingFontUrl: string | null;
-  bodyFontUrl: string | null;
-  borderRadius: number;   // px, 0–16
-  sidebarStyle: "dark" | "light";
 }
 
 export const SETTINGS_DEFAULTS: AppSettings = {
-  primaryColor: "#2D5BFF",
-  secondaryColor: "#0D9488",
-  accentColor: "#F59E0B",
-  appName: "SF Dashboard",
+  accentColor: "#946F1F",
+  inkColor: null,
+  appName: "Cumulus Bank",
   logoBase64: null,
-  headingFont: "Inter",
-  bodyFont: "Inter",
-  headingFontUrl: null,
-  bodyFontUrl: null,
-  borderRadius: 8,
-  sidebarStyle: "dark",
 };
 
 export function getSettings(): AppSettings {

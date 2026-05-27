@@ -1,23 +1,32 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
-import { getSettings } from "@/lib/settings";
+import PageHeading from "@/components/PageHeading";
+import ChatPanel from "@/components/ChatPanel";
+import { getEffectiveMcpMode } from "@/lib/mcp-config";
 import SettingsClient from "./SettingsClient";
 
 export default async function SettingsPage() {
   const session = await getSession();
-  if (!session.accessToken) {
-    redirect("/");
-  }
+  if (!session.accessToken) redirect("/");
 
-  const settings = getSettings();
+  const effectiveMcpMode = getEffectiveMcpMode(session.mcpMode);
 
   return (
-    <div className="p-6 md:p-8">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-        <p className="text-sm text-gray-500 mt-1">Customize the app's branding and colors.</p>
+    <div className="flex h-full">
+      <div className="flex-1 overflow-y-auto min-w-0" style={{ background: "var(--color-paper)" }}>
+        <div className="px-8 pt-8 pb-16 max-w-2xl">
+          <div className="mb-10">
+            <PageHeading
+              categoryLabel="Workspace · Profile · Branding · Prompts"
+              headline="Settings."
+            />
+          </div>
+          <SettingsClient
+            displayName={session.displayName ?? null}
+          />
+        </div>
       </div>
-      <SettingsClient initial={settings} />
+      <ChatPanel initialMcpMode={effectiveMcpMode} hasMcpToken={!!session.mcpAccessToken} />
     </div>
   );
 }

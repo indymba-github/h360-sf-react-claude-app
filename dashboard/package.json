@@ -1,12 +1,17 @@
 {
-  "name": "dashboard",
-  "version": "0.1.0",
+  "name": "sf-ai-dashboard",
+  "version": "1.0.0",
+  "description": "AI-powered CRM dashboard for Salesforce, powered by Claude and MCP",
+  "license": "MIT",
   "private": true,
   "scripts": {
+    "predev": "node scripts/check-config.js",
+    "prestart": "node scripts/check-config.js",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "check-config": "node scripts/check-config.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",

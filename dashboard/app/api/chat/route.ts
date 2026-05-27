@@ -122,8 +122,6 @@ function deduplicateHostedTools(tools: Anthropic.Tool[]): Anthropic.Tool[] {
   }
 
   const deduped = [...best.values()].map(({ tool }) => tool);
-  console.log("Raw tools from hosted MCP:", tools.length);
-  console.log("After dedup:", deduped.length);
   return deduped;
 }
 
@@ -149,16 +147,11 @@ const RESOURCE_CACHE_TTL_MS = 5 * 60 * 1000;
 async function fetchResourceContext(client: Client, cacheKey: string): Promise<string> {
   const cached = RESOURCE_CACHE.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < RESOURCE_CACHE_TTL_MS) {
-    console.log('=== RESOURCES (from cache) ===');
     return cached.context;
   }
 
   try {
     const { resources } = await client.listResources();
-
-    console.log('=== RESOURCES LOADED ===');
-    console.log('Resource count:', resources.length);
-    resources.forEach(r => console.log(' -', r.uri));
 
     if (!resources.length) return "";
 
@@ -171,9 +164,6 @@ async function fetchResourceContext(client: Client, cacheKey: string): Promise<s
         const text = first && "text" in first ? first.text : undefined;
         if (!text) continue;
         const title = RESOURCE_SECTION_TITLES[resource.uri] ?? resource.name ?? resource.uri;
-
-        console.log('=== RESOURCE CONTENT ===');
-        console.log(title + ':', text.substring(0, 200) + '...');
 
         sections.push(`${title}:\n${text}`);
       } catch {
@@ -209,7 +199,17 @@ const BASE_SYSTEM_PROMPT =
   "5. If the user says 'no' or 'cancel', acknowledge and do not call the tool.\n\n" +
   "You can suggest write actions proactively when analysis reveals action items — for example, " +
   "after reviewing an account you might say 'I notice there are no follow-up tasks scheduled. " +
-  "Would you like me to create one?'";
+  "Would you like me to create one?'\n\n" +
+  "FOLLOW-UP QUESTIONS: At the end of EVERY response, append a fenced code block with 2-3 short " +
+  "follow-up questions the user might naturally ask next. Format exactly like this:\n" +
+  "```follow-ups\n" +
+  "What are the key contacts?\n" +
+  "Are there any open cases?\n" +
+  "Show me recent activity\n" +
+  "```\n" +
+  "The questions should be concise (under 8 words each), specific to the current context, and " +
+  "phrased as natural follow-ons to what you just said. Do not add this block if the response is " +
+  "a write proposal (asking for confirmation before a write operation).";
 
 const HOSTED_PROMPT_ADDENDUM =
   "\n\nYou have access to pre-built Salesforce prompt templates. " +
@@ -247,7 +247,11 @@ function buildAccountContextBlock(ctx: AccountContext): string {
 
 function buildSystemPrompt(mode: McpMode, resourceContext = "", accountContext?: AccountContext): string {
   const base = mode === "hosted" ? BASE_SYSTEM_PROMPT + HOSTED_PROMPT_ADDENDUM : BASE_SYSTEM_PROMPT;
-  const parts: string[] = [];
+  const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const weekday = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+  const parts: string[] = [
+    `Today's date is ${dateStr}. The current day of the week is ${weekday}.`,
+  ];
   if (accountContext) parts.push(buildAccountContextBlock(accountContext));
   parts.push(base);
   if (resourceContext) parts.push(resourceContext);
@@ -287,6 +291,25 @@ const TOOL_STATUS: Record<string, string> = {
   sf_update_record: "Updating record…",
   sf_create_record: "Creating record…",
 };
+
+/** Extract a record count from MCP tool result text. Returns null if not found. */
+function extractRecordCount(text: string): number | null {
+  // "Found N record(s)" / "Found N account(s)" / "Found N opportunity" etc.
+  const foundMatch = text.match(/Found (\d+)/i);
+  if (foundMatch) return parseInt(foundMatch[1], 10);
+  // "Query returned N record(s)"
+  const queryMatch = text.match(/Query returned (\d+)/i);
+  if (queryMatch) return parseInt(queryMatch[1], 10);
+  // JSON array heuristic: count top-level objects in a JSON block
+  const jsonMatch = text.match(/```json\s*(\[[\s\S]*?\])/);
+  if (jsonMatch) {
+    try {
+      const arr = JSON.parse(jsonMatch[1]) as unknown[];
+      if (Array.isArray(arr)) return arr.length;
+    } catch {}
+  }
+  return null;
+}
 
 // Write tools — used to emit write_complete SSE events
 const WRITE_TOOLS = new Set([
@@ -353,17 +376,11 @@ async function connectMcpClient(
 ): Promise<Client> {
   let transport: StdioClientTransport | StreamableHTTPClientTransport;
 
-  console.log('Connecting to MCP server...');
-  console.log('Transport type:', effectiveMode);
-
   if (effectiveMode === "hosted") {
     if (!hostedMcpServerUrl) {
       throw new Error("SF_MCP_SERVER_URL is required when MCP_MODE=hosted");
     }
     const bearerToken = mcpAccessToken ?? accessToken;
-    console.log("=== HOSTED MCP CONNECT ===");
-    console.log("URL:", hostedMcpServerUrl);
-    console.log("Token present:", !!bearerToken);
     transport = new StreamableHTTPClientTransport(new URL(hostedMcpServerUrl), {
       requestInit: {
         headers: {
@@ -387,10 +404,6 @@ async function connectMcpClient(
 
   const client = new Client({ name: "sf-dashboard", version: "1.0.0" });
   await client.connect(transport);
-  if (effectiveMode === "hosted") {
-    console.log("=== HOSTED MCP CONNECTED ===");
-    console.log("Tools and prompts available");
-  }
   return client;
 }
 
@@ -419,7 +432,6 @@ export async function POST(request: NextRequest) {
   }
 
   const effectiveMode = getEffectiveMcpMode(session.mcpMode);
-  console.log('Effective MCP mode:', effectiveMode, '(session:', session.mcpMode ?? "unset", ', env:', process.env.MCP_MODE ?? "unset", ')');
 
   if (effectiveMode === "hosted" && !session.mcpAccessToken) {
     return NextResponse.json({ error: "MCP_NOT_CONNECTED" }, { status: 401 });
@@ -445,11 +457,6 @@ export async function POST(request: NextRequest) {
   }
   const { messages, accountContext } = body;
 
-  console.log('=== ACCOUNT CONTEXT ===');
-  console.log('Context received:', accountContext ?
-    `${accountContext.accountName} (${accountContext.accountId})` :
-    'none');
-
   // Reference kept outside the stream so cancel() can abort an in-flight Anthropic stream
   let currentAnthropicStream: ReturnType<typeof anthropic.messages.stream> | null = null;
 
@@ -468,33 +475,16 @@ export async function POST(request: NextRequest) {
         const connectAndList = async () => {
           mcpClient = await connectMcpClient(session.accessToken!, session.instanceUrl!, session.mcpAccessToken, effectiveMode);
 
-          console.log('=== MCP CONNECTION ===');
-          console.log('Mode:', effectiveMode);
-
           const [{ tools: mcpTools }, { prompts: mcpPrompts }] = await Promise.all([
             mcpClient.listTools(),
             effectiveMode === "hosted" ? mcpClient.listPrompts() : Promise.resolve({ prompts: [] }),
           ]);
 
-          console.log('=== TOOLS ===');
-          console.log('Tool count:', mcpTools.length);
-          mcpTools.forEach(t => console.log(' -', t.name));
-
           if (effectiveMode === "hosted") {
             const prompts = mcpPrompts;
-
-            console.log('=== PROMPTS LOADED ===');
-            console.log('Prompt count:', prompts.length);
-            prompts.forEach(p => console.log(' -', p.name));
-
             promptNames = new Set(prompts.map(p => p.name));
             const dedupedTools = deduplicateHostedTools(normalizeTools(mcpTools));
             const anthropicToolList = sanitizeToolPropertyNames([...dedupedTools, ...normalizePrompts(prompts)]);
-
-            const systemPrompt = buildSystemPrompt(effectiveMode, "", accountContext);
-            console.log('=== SYSTEM PROMPT PREVIEW ===');
-            console.log(systemPrompt.substring(0, 300));
-
             return anthropicToolList;
           }
 
@@ -503,10 +493,6 @@ export async function POST(request: NextRequest) {
           if (messages.length <= 1) {
             resourceContext = await fetchResourceContext(mcpClient, `${session.userId ?? "anon"}:${session.instanceUrl!}`);
           }
-
-          const systemPrompt = buildSystemPrompt(effectiveMode, resourceContext, accountContext);
-          console.log('=== SYSTEM PROMPT PREVIEW ===');
-          console.log(systemPrompt.substring(0, 300));
 
           promptNames = new Set();
           return sanitizeToolPropertyNames(normalizeTools(mcpTools));
@@ -518,8 +504,6 @@ export async function POST(request: NextRequest) {
           if (effectiveMode === "hosted" && isMcpSessionDropped(connectErr) && !mcpReconnected) {
             // Server dropped its state — reconnect with same tokens, no refresh needed
             mcpReconnected = true;
-            console.log("=== MCP RECONNECT ===");
-            console.log("Reason: server not initialized");
             const staleClient = mcpClient as Client | null;
             if (staleClient) await staleClient.close().catch(() => {});
             mcpClient = null;
@@ -560,26 +544,15 @@ export async function POST(request: NextRequest) {
         };
 
         const runTool = async (toolUse: Anthropic.ToolUseBlock): Promise<string> => {
-          console.log('=== TOOL CALL ===');
-          console.log('Tool:', toolUse.name);
-          console.log('Input:', JSON.stringify(toolUse.input).substring(0, 200));
-
           try {
-            const text = await execTool(toolUse);
-            console.log('=== RESPONSE ===');
-            console.log('Length:', text.length, 'chars');
-            return text;
+            return await execTool(toolUse);
           } catch (err) {
             // Per-tool reconnect for hosted session drops — one retry per call
             if (effectiveMode === "hosted" && isMcpSessionDropped(err)) {
-              console.log("=== MCP SESSION EXPIRED, RECONNECTING ===");
               await mcpClient!.close().catch(() => {});
               mcpClient = await connectMcpClient(session.accessToken!, session.instanceUrl!, session.mcpAccessToken, effectiveMode);
               try {
-                const text = await execTool(toolUse);
-                console.log('=== RESPONSE (after reconnect) ===');
-                console.log('Length:', text.length, 'chars');
-                return text;
+                return await execTool(toolUse);
               } catch {
                 return "Data temporarily unavailable. Please try again.";
               }
@@ -622,31 +595,56 @@ export async function POST(request: NextRequest) {
 
         const systemPrompt = buildSystemPrompt(effectiveMode, resourceContext);
 
+        const callAnthropicWithRetry = async (
+          params: Parameters<typeof anthropic.messages.stream>[0],
+          onText: (text: string) => void,
+          maxRetries = 3,
+        ): Promise<Anthropic.Message | null> => {
+          for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            const anthropicStream = anthropic.messages.stream(params);
+            currentAnthropicStream = anthropicStream;
+            anthropicStream.on("text", onText);
+            try {
+              const message = await anthropicStream.finalMessage();
+              currentAnthropicStream = null;
+              return message;
+            } catch (err) {
+              currentAnthropicStream = null;
+              if (err instanceof Anthropic.APIError && err.status === 529 && attempt < maxRetries) {
+                const delay = Math.pow(2, attempt + 1) * 1000;
+                await new Promise<void>((r) => setTimeout(r, delay));
+                continue;
+              }
+              if (err instanceof Anthropic.APIError && err.status === 529) {
+                return null;
+              }
+              throw err;
+            }
+          }
+          return null;
+        };
+
         while (continueLoop) {
           if (++loopIterations > MAX_TOOL_ITERATIONS) {
             controller.enqueue(sseEvent({ type: "error", error: "Tool call limit reached — response may be incomplete." }));
             break;
           }
-          console.log('=== FULL SYSTEM PROMPT LENGTH ===');
-          console.log('Characters:', systemPrompt.length);
-          console.log('First 200 chars:', systemPrompt.substring(0, 200));
-          console.log('Last 200 chars:', systemPrompt.substring(systemPrompt.length - 200));
-          const anthropicStream = anthropic.messages.stream({
-            model: "claude-sonnet-4-6",
-            max_tokens: 4096,
-            system: systemPrompt,
-            tools: anthropicTools,
-            messages: conversationMessages,
-          });
-          currentAnthropicStream = anthropicStream;
+          const message = await callAnthropicWithRetry(
+            {
+              model: "claude-sonnet-4-6",
+              max_tokens: 4096,
+              system: systemPrompt,
+              tools: anthropicTools,
+              messages: conversationMessages,
+            },
+            (text) => controller.enqueue(sseEvent({ type: "token", text })),
+          );
 
-          // Stream text tokens to the client as they arrive
-          anthropicStream.on("text", (text) => {
-            controller.enqueue(sseEvent({ type: "token", text }));
-          });
-
-          const message = await anthropicStream.finalMessage();
-          currentAnthropicStream = null;
+          if (!message) {
+            controller.enqueue(sseEvent({ type: "token", text: "The AI service is temporarily busy. Please try again in a moment." }));
+            continueLoop = false;
+            break;
+          }
 
           if (message.stop_reason === "tool_use") {
             conversationMessages.push({ role: "assistant", content: message.content });
@@ -663,19 +661,33 @@ export async function POST(request: NextRequest) {
                   label: TOOL_LABELS[toolUse.name] ?? `Called ${toolUse.name}`,
                 });
 
+                // Signal that this tool is starting
                 controller.enqueue(
-                  sseEvent({
-                    type: "status",
-                    text: TOOL_STATUS[toolUse.name] ?? `Calling ${toolUse.name}…`,
-                  })
+                  sseEvent({ type: "tool_start", toolId: toolUse.id, toolName: toolUse.name })
                 );
+
+                const callStart = Date.now();
 
                 try {
                   const textContent = await runTool(toolUse);
 
+                  // Enforce minimum 300ms querying phase so label is readable
+                  const elapsed = Date.now() - callStart;
+                  if (elapsed < 300) {
+                    await new Promise<void>((r) => setTimeout(r, 300 - elapsed));
+                  }
+
                   if (textContent.includes("SF_SESSION_EXPIRED")) {
+                    controller.enqueue(
+                      sseEvent({ type: "tool_result", toolId: toolUse.id, toolName: toolUse.name, recordCount: null, error: true })
+                    );
                     return { kind: "sfExpired", toolUse };
                   }
+
+                  const recordCount = extractRecordCount(textContent);
+                  controller.enqueue(
+                    sseEvent({ type: "tool_result", toolId: toolUse.id, toolName: toolUse.name, recordCount, error: false })
+                  );
 
                   if (WRITE_TOOLS.has(toolUse.name)) {
                     const success = textContent.startsWith("✅");
@@ -694,6 +706,9 @@ export async function POST(request: NextRequest) {
 
                   return { kind: "ok", result: { type: "tool_result" as const, tool_use_id: toolUse.id, content: textContent } };
                 } catch (err) {
+                  controller.enqueue(
+                    sseEvent({ type: "tool_result", toolId: toolUse.id, toolName: toolUse.name, recordCount: null, error: true })
+                  );
                   if (effectiveMode === "hosted" && isMcpSessionDropped(err)) {
                     return { kind: "mcpDropped", toolUse };
                   }
@@ -723,9 +738,6 @@ export async function POST(request: NextRequest) {
             // ── Branch 0: MCP server dropped session — reconnect and retry ─
             if (mcpDroppedItems.length > 0 && !mcpReconnected) {
               mcpReconnected = true;
-              console.log("=== MCP RECONNECT ===");
-              console.log("Reason: server not initialized");
-
               await mcpClient!.close().catch(() => {});
               mcpClient = await connectMcpClient(session.accessToken!, session.instanceUrl!, session.mcpAccessToken, effectiveMode);
 
