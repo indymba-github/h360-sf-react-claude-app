@@ -50,6 +50,35 @@ Save. Wait 2–10 minutes for Salesforce to propagate the change. Retry login.
 
 **Fix:** Verify `salesforce-mcp-server/src/index.ts` uses `StdioServerTransport`, not an HTTP transport. The default in this repo is stdio. If you've modified it, switch back.
 
+### "Hosted MCP works but returns 404 'not initialized' on tool calls"
+
+**Symptom:** Hosted MCP authentication succeeds and the initial connection returns 200, but subsequent tool calls fail with "not initialized" errors.
+
+**Cause:** The Salesforce Hosted MCP protocol requires a three-step handshake:
+1. `initialize` — connection setup
+2. `notifications/initialized` — explicit acknowledgment that initialization is complete
+3. Tool calls
+
+Many MCP client implementations skip step 2 because it returns no response (it's a notification, not a request). Without it, the Hosted MCP server treats subsequent calls as coming from an uninitialized session.
+
+**Fix:** This is handled by the app's MCP client code automatically, but if you're extending the integration: ensure your client sends `notifications/initialized` after the initial `initialize` exchange. The app also auto-retries once with a fresh transport when it sees this error.
+
+### "Hosted MCP shows duplicate tools"
+
+**Symptom:** Tools appear two or three times in the AI panel's tool list. Calling them may work but the UI looks confused.
+
+**Cause:** Salesforce Hosted MCP exposes tools across multiple permission scope categories (reads, all, mutations, deletes). The same logical tool can appear up to four times if the user has multiple permission scope grants.
+
+**Fix:** The app deduplicates tools automatically before sending them to Claude. If you're extending the MCP client integration in your own code, deduplicate by tool name before passing to your LLM.
+
+### "Hosted MCP returns 'invalid request' on tool calls"
+
+**Symptom:** Tool calls succeed in MCP Inspector but fail in the dashboard with vague "invalid request" errors from `api.salesforce.com`.
+
+**Cause:** Missing required HTTP headers. Hosted MCP requires the `Accept` header to be `application/json, text/event-stream` — not just `application/json`. The dual content type signals that the client can handle both JSON responses and server-sent event streams.
+
+**Fix:** This is set automatically by the app's MCP client. If you're building your own integration, ensure your fetch headers include both content types.
+
 ### "MCP server fails to start" / no tools visible in Inspector
 
 **Symptom:** Running `node dist/index.js` exits immediately, or the Inspector connects but shows zero tools.
@@ -118,6 +147,27 @@ In future versions, this could be made dynamic via `Schema.sObjectType.Account.f
 Save. Wait 2–10 minutes. Restart the dev server. Retry.
 
 If you're using a single External Client App for both the dashboard's user-facing OAuth AND Agentforce, split into two apps. The dashboard needs broad scopes (`full`, `refresh_token`); Agentforce needs narrow scopes. See `docs/SALESFORCE_SETUP.md` → Step 3.
+
+### "Agentforce prompt template silently fails or returns blank"
+
+**Symptom:** A prompt template that works in the Salesforce Setup UI returns nothing or fails silently when executed via the app.
+
+**Cause:** Prompt template input types matter. `lightning__recordInfoType` expects a full record object with an Id field; `lightning__textType` accepts plain text. If you pass the wrong shape, Agentforce silently fails rather than raising a clear error.
+
+**Fix:** Verify your prompt template's input type in Salesforce Setup → Prompt Templates → your template → Input variables. Match the data your app sends to the declared input type. If you're passing a record ID, the input type should be `lightning__recordInfoType` and you should construct the input as `{ Id: "001..." }`, not just the bare ID string.
+
+### "Agentforce off-topic rejection on valid queries"
+
+**Symptom:** You ask Agentforce a reasonable question, and it responds with something like "I'm not able to help with that" or routes to a completely different topic than expected.
+
+**Cause:** Agent topic routing is driven by Topic descriptions and scope fields. If your Topic's description is overly narrow ("Only handles XYZ"), valid questions get rejected. If a different Topic has overlapping responsibilities (e.g., a Slack integration topic that intercepts general questions), it can claim your request.
+
+**Fix:** In Salesforce Setup → Agentforce → your agent → Topics:
+
+1. Review each Topic's description — make it specific but not so narrow it excludes valid use cases
+2. Check Topic scope fields — these define what kinds of records and actions the topic can address
+3. If multiple Topics could match your query, the agent picks one based on classification. Disambiguate by making each Topic's domain clear in its description.
+4. Test with the Agentforce Vibes preview to see which Topic was matched; the routing decision is usually visible in the trace.
 
 ### "Failed to start agent session (404): No valid version available"
 

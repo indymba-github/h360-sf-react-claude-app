@@ -118,6 +118,48 @@ Each org has its own External Client Apps, JWT certificate, and Agentforce confi
 
 Cross-org session leakage causes one of the most confusing failure modes: hardcoded "View in Salesforce" links pointing at the old org, "Connected App not found" errors despite the app existing in the new org. The fix is always a full browser storage clear followed by a fresh OAuth login.
 
+### Verification sequence
+
+After migration, work through this sequence in order. Each step builds on the previous and reveals problems early:
+
+1. **Build MCP server, test with Inspector.**
+```bash
+   cd salesforce-mcp-server
+   npm run build
+   npx @modelcontextprotocol/inspector node dist/index.js
+```
+   Call `sf_list_accounts` from the Inspector. If this fails, JWT auth or Permission Set assignment is wrong. Don't proceed until this works.
+
+2. **Start the dashboard, sign in.** Confirm OAuth flow completes and the dashboard loads with account data. If the dashboard renders but shows no data, RBAC or scopes are likely the issue.
+
+3. **Test Local mode in the AI panel.** Ask a simple question that requires data retrieval (e.g., "List my top 5 accounts by revenue"). Confirm Claude calls tools and returns real data.
+
+4. **Sign out, reconnect Hosted MCP, test Hosted mode.** This requires re-authorizing the Hosted MCP External Client App on the new org. If Hosted shows as "Configured" but tool calls fail, verify `api.salesforce.com` connectivity from your environment.
+
+5. **Test Agentforce mode.** Ask the same simple question. If you get a generic acknowledgment without data, the agent's topics need configuration. If you get a 412 "Invalid Config" error, the agent isn't deployed/active. If you get 404 "No valid version available", you're hitting the trial-org limitation (see TROUBLESHOOTING.md).
+
+6. **Test briefing buttons on an account detail page.** These route through Agentforce. If Agentforce chat works but briefings fail, the agent doesn't have topics configured for the specific briefing queries.
+
+7. **Test news alert dismiss.** Find or create a Task with subject "News Alert: [text]" linked to an account. Verify it appears on the dashboard and can be dismissed.
+
+If any step fails, fix it before moving to the next. Failures cascade — the early steps establish foundations the later ones depend on.
+
+### What changes vs. what stays the same
+
+**Org-specific (must change when migrating):**
+- All `SF_CLIENT_ID` / `SF_CLIENT_SECRET` pairs (each External Client App has its own)
+- `SF_LOGIN_URL` (My Domain URL of the new org)
+- `SF_USERNAME` (your user in the new org)
+- `SF_AGENT_ID` (Agentforce agents are org-specific)
+- `SF_MCP_SERVER_URL` (if using Hosted MCP)
+
+**Org-independent (stays the same):**
+- `server.key` and `server.crt` (the JWT cert just gets uploaded to each org)
+- `ANTHROPIC_API_KEY`
+- `SESSION_SECRET`
+- All application code (zero changes)
+- `.settings.json` (branding configuration)
+
 ## Architecture note: Why three External Client Apps
 
 This setup uses three separate External Client Apps:

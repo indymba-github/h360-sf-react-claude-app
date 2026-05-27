@@ -1,118 +1,47 @@
 # Customization
 
-How to configure the app's appearance, AI behavior, and tool inventory after the initial setup is complete.
+How to extend the codebase: adding MCP tools, modifying components, configuring AI providers via environment variables, and customizing the chat experience.
 
-## Branding
+For UI-level customization (branding, presets, prompts, theme, choosing AI providers), see `SETTINGS.md` — that's where most day-to-day customization happens through the app's Settings page.
 
-The app's visual identity is fully configurable from Settings. Brand changes take effect immediately and persist in `dashboard/.settings.json` (which is gitignored).
+This document covers the deeper code-level changes.
 
-### Brand presets
+## AI provider configuration via environment variables
 
-Settings → **Brand identity** → **Presets** shows a library of saved brand configurations. The repo ships with one preset (Cumulus, a placeholder). Each preset stores a complete brand identity: colors, logo, fonts, border radius, and sidebar style.
+The Settings page auto-detects which AI providers are available based on environment variables in `.env.local`. To enable a provider, set its env vars and restart the dev server.
 
-Available actions:
+| Provider | Required env vars | Behavior |
+|---|---|---|
+| Local | `LOCAL_MCP_ENABLED` is unset or `true`, and the MCP server is built | Spawns the custom MCP server in `salesforce-mcp-server/` as a child process |
+| Hosted | `SF_MCP_SERVER_URL` set to a valid Salesforce-hosted MCP endpoint | Connects via StreamableHTTPClientTransport |
+| Agentforce | `SF_AGENT_CLIENT_ID` and `SF_AGENT_CLIENT_SECRET` set | Routes chat through Agentforce Agent API via Client Credentials |
 
-- **Apply** — switch the entire app to the selected preset
-- **Edit** — modify the preset's colors, logo, and typography in place
-- **Duplicate** — copy a preset as a starting point for a new one
-- **Delete** — remove a custom preset (the original Cumulus preset cannot be deleted; it can be restored if you accidentally edit it via **Restore seeded presets**)
+Important: Next.js caches environment variables on startup. Changes to `.env.local` require a dev server restart (`Ctrl+C`, then `npm run dev`).
 
-Presets are stored in browser localStorage, so each user has their own preset library on their own machine. Presets do not sync across devices or get committed to the repo.
+Once env vars are set, the Settings page (Section 08 — AI provider) shows the provider as "Configured" and exposes it in the AI panel's provider toggle.
 
-### Brand from website
+## Managing Agentforce agents
 
-Settings → **Brand identity** → **Brand from website**. Enter a company website URL and the app extracts brand identity automatically:
+The Agentforce provider supports multiple saved agent profiles. The first profile seeds from the `SF_AGENT_ID` env var on first run; additional profiles can be created from the Settings page.
 
-- **Primary color, secondary color, and additional palette** — extracted from CSS files, style tags, inline styles, and `meta theme-color` tags
-- **Logo** — extracted from the most prominent logo image on the page
-- **Heading and body fonts** — detected from Google Fonts imports and CSS font-family declarations
-- **Visual analysis** — Claude reviews the rendered page to identify and prioritize brand elements
+For day-to-day use:
 
-Results appear as a palette below the input. Each color shows the value; clicking opens a popover with "Use as primary," "Use as secondary," and "Use as accent" options. Logo and fonts have similar "Apply" buttons.
+- **Add or edit agents:** Settings → AI provider → Manage agents
+- **Switch the active agent:** AI Assistant panel header (not Settings — this is intentional)
+- **Switch mid-conversation:** The current Agentforce session ends silently; the next message starts a fresh session with the new agent
 
-You can apply individual elements or click **Apply all** to set everything at once. Either way, the result is editable in the Palette and Typography sections below.
+Profiles live in browser localStorage. They do not sync across devices and are not committed to the repo.
 
-### Palette
-
-Color tokens for the app:
-
-- **Primary** — the main brand color, used for buttons, links, and chart accents
-- **Secondary** — used sparingly for distinction (selected states, accent gradients)
-- **Accent** — used for callouts, hover states, brass-style ornament
-
-Each color has a hex input and a swatch you can click to open a color picker. Changes take effect immediately.
-
-In dark mode, brand colors are automatically lifted (HSL adjustment) for text on dark backgrounds while paint surfaces (chart bars, buttons) keep the original brand hue. You don't need to set separate dark-mode colors.
-
-### Typography
-
-- **Heading font** — used for page titles and section headers
-- **Body font** — used for everything else
-
-Both are selected from a curated list of Google Fonts. The font files load automatically when applied.
-
-### Border radius
-
-A slider from 0 (sharp corners) to 16 (very rounded) controls the corner radius on cards, buttons, badges, and panels app-wide.
-
-### Sidebar style
-
-Toggle between **Dark sidebar** (default; cream content area with a dark navigation bar) and **Light sidebar** (uniform light background throughout).
-
-### Theme
-
-Settings → **Theme** offers Light, Dark, or System (follows your OS preference). The current default is Light. Changes affect background, surface, ink (text), and ornament colors. Brand colors adapt automatically.
-
-## AI provider configuration
-
-The AI Assistant panel supports three providers. Settings → **AI provider** shows which providers are configured and how to enable the others.
-
-### Auto-detection
-
-The app determines provider availability from environment variables at server startup, not from user-facing toggles. The Settings panel reads `/api/config/providers` to display the current state.
-
-A provider shows as **Configured** when its required env vars are set:
-
-| Provider | Required env vars |
-|---|---|
-| Local | `LOCAL_MCP_ENABLED` is unset or `true` (default), and the MCP server has been built |
-| Hosted | `SF_MCP_SERVER_URL` is set |
-| Agentforce | `SF_AGENT_CLIENT_ID` and `SF_AGENT_CLIENT_SECRET` are set |
-
-If you change env vars, **restart the dev server** — Next.js caches environment variables on startup.
-
-### Managing Agentforce agents
-
-When Agentforce is configured, Settings → **AI provider** → **Agentforce** → **Manage agents** opens the agent profile editor.
-
-You can save multiple Agentforce agent profiles, each with:
-
-- A display label (e.g., "Sales Demo Agent")
-- The Salesforce Agent ID
-- An optional description
-
-The first profile is seeded automatically from your `SF_AGENT_ID` env var when set. After that, profiles are stored in browser localStorage. Editing the default profile's Agent ID overrides the env value for your session.
-
-To switch between agents during work, use the picker in the **AI Assistant panel** (below the provider toggle when Agentforce is selected). The Settings page is for setup; the AI panel is for in-the-moment switching.
-
-When you switch agents mid-conversation, the current Agentforce session is silently ended. Your next message starts a fresh session with the new agent.
-
-### Switching providers
-
-The provider toggle in the AI panel (`Local | Hosted | Agentforce`) selects which provider handles new messages. Switching providers preserves the conversation history but does not migrate state — each provider has its own session model.
-
-Recommended provider per task:
-
-- **Local** — exploratory queries, ad-hoc questions, cross-object joins, write operations through your custom tools
-- **Hosted** — standard CRM queries when you want data to stay inside Salesforce's runtime
-- **Agentforce** — Topic-routed conversations where Trust Layer governance and Agentforce's built-in capabilities are required
+Implementation lives in `dashboard/lib/agents.ts`.
 
 ## Adding tools to the local MCP server
 
-The local MCP server (`salesforce-mcp-server/`) exposes Salesforce data and operations as MCP tools. To add new tools:
+The local MCP server (`salesforce-mcp-server/`) exposes Salesforce data and operations as MCP tools. Tools live in `salesforce-mcp-server/src/tools/`, one file per topic.
+
+To add a new tool:
 
 1. Create a new file in `salesforce-mcp-server/src/tools/` (e.g., `myTopic.ts`)
-2. Use the existing tool pattern:
+2. Use the existing tool pattern (see `accounts.ts` or `cases.ts` for examples):
 
 ```typescript
 import { z } from "zod";
@@ -146,7 +75,7 @@ export async function executeMyCustomTool(args: { accountId: string }) {
 }
 ```
 
-3. Register it in `salesforce-mcp-server/src/index.ts`:
+3. Register the tool in `salesforce-mcp-server/src/index.ts`:
 
 ```typescript
 import { myCustomTool, executeMyCustomTool } from "./tools/myTopic.js";
@@ -184,25 +113,25 @@ A few patterns the existing tools follow that are worth maintaining:
 - **Tool descriptions are prompts.** Claude decides whether to call a tool based on its description. Be specific about what it does, what inputs mean, and when it should be used.
 - **Prefer narrow tools over broad ones.** `sf_get_pipeline_summary` is more useful than `sf_run_arbitrary_soql` because Claude doesn't have to guess at the right SOQL.
 - **Return structured data, not prose.** Tools should return JSON. Let Claude format the prose response.
-- **Annotate tools honestly.** `readOnlyHint: false` and `destructiveHint: true` on any tool that writes. The dashboard surfaces destructive tools differently.
+- **Annotate tools honestly.** `readOnlyHint: false` and `destructiveHint: true` on any tool that writes. The dashboard surfaces destructive tools differently and Claude will request user approval before invoking.
 
 ## Voice input
 
 The AI panel supports push-and-hold voice input via the browser's SpeechRecognition API. Hold the microphone button to record; release to send. The spacebar acts as a shortcut when the input field is focused and empty.
 
-This works in Chrome, Edge, and Safari with no extra configuration. Firefox has limited support. If the mic button doesn't appear, the browser doesn't support SpeechRecognition.
+Works in Chrome, Edge, and Safari with no extra configuration. Firefox has limited support. If the mic button doesn't appear, the browser doesn't support SpeechRecognition.
 
-## Account context
+Implementation is in `dashboard/components/MicButton.tsx`.
 
-When you're on an account detail page, the AI panel automatically scopes its context to that account. The chat shows "Viewing: [Account Name]" at the top, and pronouns like "her," "his," or "this account" resolve to the current account in your message to the AI.
+## Account context awareness
+
+When you're on an account detail page, the AI panel automatically scopes its context to that account. The chat shows "Viewing: [Account Name]" at the top, and pronouns like "her," "his," or "this account" resolve to the current account.
 
 The context is a default, not a constraint. You can still ask about other accounts or the pipeline as a whole — just be explicit in the question.
 
-Context behavior works across all three providers (Local, Hosted, Agentforce).
+Context behavior works across all three providers (Local, Hosted, Agentforce). Implementation lives in `dashboard/lib/use-ai-context.tsx`.
 
 ## Environment variables reference
-
-A complete list of environment variables and their effects. See `.env.example` in both `dashboard/` and `salesforce-mcp-server/` for the templates.
 
 ### Required
 
@@ -239,16 +168,31 @@ In `salesforce-mcp-server/.env`:
 
 ## Customizing the dashboard layout
 
-The dashboard sections (KPI cards, Pipeline chart, News alerts, Top accounts, Recent activity) are defined as separate React components in `dashboard/components/`. To remove a section, comment it out of `dashboard/app/dashboard/page.tsx`. To reorder, move the components around in the JSX.
+The dashboard sections (KPI cards, Pipeline chart, News alerts, Top accounts, Recent activity, etc.) are defined as separate React components in `dashboard/components/`. To remove a section, comment it out of `dashboard/app/dashboard/page.tsx`. To reorder, move the components around in the JSX.
 
-To customize the chart colors, see `dashboard/lib/brandColors.ts` and the CSS variables it defines. Chart palettes resolve from `--color-accent`, `--color-warning`, and the editorial palette tokens.
+To customize chart colors, see `dashboard/lib/brandColors.ts` and the CSS variables it defines. Chart palettes resolve from `--color-accent` and the editorial palette tokens (`--color-ink`, `--color-paper`).
 
 ## Customizing the AI panel
 
-The AI Assistant panel is defined in `dashboard/components/ChatPanel.tsx`. Major customizations:
+The AI Assistant panel is defined in `dashboard/components/ChatPanel.tsx`. Common customizations:
 
-- **Prompt chips** — the suggested prompt buttons below the chat header are defined in `defaultChips` near the top of the file. Add, remove, or reorder.
-- **Tool visualization** — the animated "thinking → calling tool → got results" sequence is in the same file's tool-call handler. Adjust phase labels there.
-- **Response rendering** — see `AgentforceResults.tsx` and `AgentforceChoices.tsx` for how Agentforce's structured responses render. The parser in `agentforce-types.ts` is the entry point.
+- **Prompt chips** — Configurable per-page from the Settings page (Section 07 — Prompts library). The chip data is stored in browser localStorage; the panel reads from there.
+- **Tool visualization** — The animated "thinking → calling tool → got results" sequence is in `ChatPanel.tsx`'s tool-call handler. Adjust phase labels there.
+- **Response rendering** — See `AgentforceResults.tsx` and `AgentforceChoices.tsx` for how Agentforce's structured responses render. The parser in `agentforce-types.ts` is the entry point.
 
 For any changes, restart the dev server. Hot reload works for most changes but tooling/auth paths sometimes need a full restart.
+
+## File map for common customizations
+
+| Task | Files |
+|---|---|
+| Add a new MCP tool | `salesforce-mcp-server/src/tools/` (one file per topic) + register in `src/index.ts` |
+| Change AI panel behavior | `dashboard/components/ChatPanel.tsx` |
+| Modify Agentforce response rendering | `dashboard/lib/agentforce-types.ts` (parser) + `dashboard/components/AgentforceResults.tsx` and `AgentforceChoices.tsx` |
+| Add a new dashboard section | `dashboard/components/` for the new section, then add it to `dashboard/app/dashboard/page.tsx` |
+| Add a new SOQL query | `dashboard/lib/salesforce.ts` for dashboard queries, or a tool in `salesforce-mcp-server/src/tools/` for MCP queries |
+| Add a new auth flow | `dashboard/app/api/auth/` (one route per step) + `dashboard/lib/session.ts` for session schema |
+| Customize brand styling | `dashboard/lib/brandColors.ts` and `dashboard/app/globals.css` (CSS variables) |
+| Adjust agent profile storage | `dashboard/lib/agents.ts` |
+| Adjust prompt library logic | `dashboard/lib/prompts.ts` |
+| Adjust notification polling | `dashboard/hooks/useNotificationPoller.ts` |
