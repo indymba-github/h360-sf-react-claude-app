@@ -10,13 +10,16 @@ function applyStoredSettings() {
   try {
     const s = JSON.parse(localStorage.getItem("settings") ?? "{}") as Record<string, string>;
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-    if (s.accentColor) applyAccentTokens(s.accentColor);
-    // ink/paper are light-mode customizations — don't override dark-mode tokens
-    if (!isDark) {
-      if (s.inkColor)   document.documentElement.style.setProperty("--color-ink",   s.inkColor);
-      if (s.paperColor) document.documentElement.style.setProperty("--color-paper", s.paperColor);
-    } else {
+    if (s.accentColor) {
+      const palette = (!isDark && s.inkColor && s.paperColor)
+        ? { ink: s.inkColor, paper: s.paperColor }
+        : undefined;
+      applyAccentTokens(s.accentColor, palette);
+    }
+    // In dark mode, remove any light-mode overrides so dark-mode CSS tokens win
+    if (isDark) {
       document.documentElement.style.removeProperty("--color-ink");
+      document.documentElement.style.removeProperty("--color-ink-deep");
       document.documentElement.style.removeProperty("--color-paper");
     }
     if (s.displayFont) {

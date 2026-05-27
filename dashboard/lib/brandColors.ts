@@ -81,6 +81,16 @@ function hslToHex({ h, s, l }: { h: number; s: number; l: number }): string {
 }
 
 /**
+ * Derives the "deep" variant of an Ink color — slightly darker, used for
+ * the header bar background. Reduces HSL lightness by 6 pp, floored at 4%.
+ */
+export function inkDeepFromInk(hex: string): string {
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return hex;
+  const { h, s, l } = hexToHsl(hex);
+  return hslToHex({ h, s, l: Math.max(4, l - 6) });
+}
+
+/**
  * Returns a brand accent color readable against a dark background.
  * If the color is already light enough (L >= 55%), returns it unchanged.
  * Otherwise lifts lightness to 65% and lowers saturation slightly so
@@ -98,12 +108,18 @@ export function brandAccentForDarkMode(hex: string): string {
 }
 
 /**
- * Sets both --color-accent and --color-accent-on-dark on the document root.
- * Call this everywhere a brand accent is applied.
+ * Applies brand color tokens to the document root.
+ * Pass only accent to update just the accent family.
+ * Pass the full palette to also update ink, ink-deep, and paper.
  */
-export function applyAccentTokens(hex: string) {
+export function applyAccentTokens(accent: string, palette?: { ink: string; paper: string }) {
   const root = document.documentElement;
-  root.style.setProperty("--color-accent", hex);
-  root.style.setProperty("--color-accent-on-dark", brandAccentForDarkMode(hex));
-  root.style.setProperty("--color-accent-foreground", brandForegroundOn(hex));
+  root.style.setProperty("--color-accent", accent);
+  root.style.setProperty("--color-accent-on-dark", brandAccentForDarkMode(accent));
+  root.style.setProperty("--color-accent-foreground", brandForegroundOn(accent));
+  if (palette) {
+    root.style.setProperty("--color-ink",      palette.ink);
+    root.style.setProperty("--color-ink-deep", inkDeepFromInk(palette.ink));
+    root.style.setProperty("--color-paper",    palette.paper);
+  }
 }

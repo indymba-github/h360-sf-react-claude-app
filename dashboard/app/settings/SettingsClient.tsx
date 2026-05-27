@@ -1867,10 +1867,11 @@ export default function SettingsClient({ displayName }: { displayName: string | 
   useEffect(() => {
     const s = readSettings();
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-    if (s.accentColor) applyAccentTokens(s.accentColor);
-    if (!isDark) {
-      if (s.inkColor)   document.documentElement.style.setProperty("--color-ink",   s.inkColor);
-      if (s.paperColor) document.documentElement.style.setProperty("--color-paper", s.paperColor);
+    if (s.accentColor) {
+      const palette = (!isDark && s.inkColor && s.paperColor)
+        ? { ink: s.inkColor, paper: s.paperColor }
+        : undefined;
+      applyAccentTokens(s.accentColor, palette);
     }
     if (s.displayFont) {
       loadGoogleFont(s.displayFont);
@@ -1905,9 +1906,7 @@ export default function SettingsClient({ displayName }: { displayName: string | 
     localStorage.setItem("theme", "light");
 
     // Apply CSS tokens immediately
-    applyAccentTokens(DEFAULT_ACCENT);
-    document.documentElement.style.setProperty("--color-ink", DEFAULT_INK);
-    document.documentElement.style.setProperty("--color-paper", DEFAULT_PAPER);
+    applyAccentTokens(DEFAULT_ACCENT, { ink: DEFAULT_INK, paper: DEFAULT_PAPER });
     document.documentElement.style.setProperty("--font-display", `'${DEFAULT_DISPLAY_FONT}', serif`);
     document.documentElement.style.setProperty("--font-body", "'Inter', sans-serif");
     document.documentElement.setAttribute("data-theme", "light");
@@ -1930,10 +1929,10 @@ export default function SettingsClient({ displayName }: { displayName: string | 
   function handlePresetActivate(preset: DemoPack) {
     // Apply palette — skip ink/paper in dark mode so the dark theme tokens win
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-    applyAccentTokens(preset.palette.accent);
     if (!isDark) {
-      document.documentElement.style.setProperty("--color-ink",   preset.palette.ink);
-      document.documentElement.style.setProperty("--color-paper", preset.palette.paper);
+      applyAccentTokens(preset.palette.accent, { ink: preset.palette.ink, paper: preset.palette.paper });
+    } else {
+      applyAccentTokens(preset.palette.accent);
     }
 
     // Apply typography

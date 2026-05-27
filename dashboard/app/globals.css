@@ -9,7 +9,7 @@
   --color-paper-bright: #F4F1EA;   /* always-cream: used for text on always-dark surfaces */
   --color-surface:      #FCFAF5;
   --color-ink:          #1B1F2A;
-  --color-ink-deep:     #1B1F2A;   /* always-dark: header bar, signal-card dark variant */
+  --color-ink-deep:     #1B1F2A;   /* darker variant of ink, used for header bar (overridden per-preset) */
   --color-ink-muted:    #5A5D67;
   --color-ink-soft:     #8A8D95;
   --color-border:       #E5E0D5;
@@ -71,7 +71,7 @@ body {
   --color-paper-bright: #F4F1EA;   /* stays cream in dark mode — for text on always-dark surfaces */
   --color-surface:      #252A35;
   --color-ink:          #F4F1EA;
-  --color-ink-deep:     #0F1218;   /* darker than paper bg so dark-variant cards are still distinct */
+  --color-ink-deep:     #0F1218;   /* dark mode default for ink-deep, used for header bar (overridden per-preset) */
   --color-ink-muted:    #B0B3BA;
   --color-ink-soft:     #9CA0AB;   /* lifted further for WCAG AA at small sizes on dark surface */
   --color-border:       #3A3F4A;
