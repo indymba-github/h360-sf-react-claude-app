@@ -57,7 +57,10 @@ export default function RenderSlot({
       <style jsx>{`
         .render-slot-overlay {
           position: fixed;
-          inset: 0;
+          top: 0;
+          bottom: 0;
+          left: 0;
+          right: var(--ai-panel-width, 0px);
           display: flex;
           align-items: flex-start;
           justify-content: center;
@@ -65,6 +68,7 @@ export default function RenderSlot({
           padding-bottom: 40px;
           z-index: 9000;
           pointer-events: none;
+          transition: right 200ms ease;
         }
 
         .render-slot-backdrop {
@@ -81,7 +85,7 @@ export default function RenderSlot({
           border: 1px solid var(--color-border);
           border-radius: 12px;
           box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
-          width: min(700px, calc(100vw - 80px));
+          width: min(700px, calc(100vw - var(--ai-panel-width, 0px) - 80px));
           max-height: calc(100vh - 120px);
           display: flex;
           flex-direction: column;

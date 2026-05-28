@@ -229,6 +229,9 @@ function AssistantMarkdown({ content }: { content: string }) {
         td: ({ children }) => (
           <td className="px-2 py-1" style={{ border: "0.5px solid var(--color-border)" }}>{children}</td>
         ),
+        a: ({ href, children }) => (
+          <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+        ),
       }}
     >
       {content}
@@ -997,6 +1000,20 @@ export default function ChatPanel({
       try { localStorage.setItem(LS_WIDTH_KEY, String(panelWidthPct)); } catch {}
     }
   }, [panelWidthPct, collapsed]);
+
+  // Publish live panel width so overlays (RenderSlot) can avoid covering it
+  useEffect(() => {
+    const widthValue = collapsed
+      ? `${COLLAPSED_WIDTH}px`
+      : `${panelWidthPct * 100}vw`;
+    document.documentElement.style.setProperty('--ai-panel-width', widthValue);
+  }, [panelWidthPct, collapsed]);
+
+  useEffect(() => {
+    return () => {
+      document.documentElement.style.removeProperty('--ai-panel-width');
+    };
+  }, []);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     if (collapsed) return;

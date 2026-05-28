@@ -6,9 +6,11 @@
 
 import { ComponentType } from 'react'
 import AccountRiskBriefing from '@/components/risk/AccountRiskBriefing'
+import MortgageCalculator from '@/components/mortgage/MortgageCalculator'
 
 const REGISTRY: Record<string, ComponentType<any>> = {
   account_risk_briefing: AccountRiskBriefing,
+  mortgage_calculator: MortgageCalculator,
 }
 
 /**
