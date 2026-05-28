@@ -39,6 +39,7 @@ import { RESOURCES, readResource } from "./resources.js";
 import { PROMPTS, getPrompt } from "./prompts.js";
 import { getNewsAlerts as mcpGetNewsAlerts, getNewsAlertsSchema, getTasks, getTasksSchema } from "./tools/tasks.js";
 import { renderAccountRiskBriefingTool, renderAccountRiskBriefingSchema, executeRenderAccountRiskBriefing } from "./tools/render.js";
+import { createMortgageOpportunityTool, executeCreateMortgageOpportunity } from "./tools/opportunity-write.js";
 
 const READ_ONLY: ToolAnnotations = {
   readOnlyHint: true,
@@ -366,6 +367,7 @@ const TOOLS = [
     },
   },
   renderAccountRiskBriefingTool,
+  createMortgageOpportunityTool,
 ];
 
 // ── Handler: list tools ────────────────────────────────────────────────────
@@ -531,6 +533,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "render_account_risk_briefing": {
         const input = renderAccountRiskBriefingSchema.parse(args ?? {});
         return await executeRenderAccountRiskBriefing(input);
+      }
+
+      case "create_mortgage_opportunity": {
+        return await executeCreateMortgageOpportunity(
+          (args ?? {}) as Parameters<typeof executeCreateMortgageOpportunity>[0]
+        );
       }
 
       default:

@@ -9,6 +9,7 @@ import { getEffectiveMcpMode, localMcpServerPath, hostedMcpServerUrl } from "@/l
 import type { McpMode } from "@/lib/mcp-config";
 import { refreshSession, refreshMcpSession, PROACTIVE_REFRESH_THRESHOLD_MS } from "@/lib/token-refresh";
 import { hasRenderDirective, type RenderDirective } from "@/lib/render-directives";
+import { RENDER_TOOLS, RENDER_TOOL_NAMES, handleRenderTool } from "@/lib/render-tools";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -196,7 +197,7 @@ const BASE_SYSTEM_PROMPT =
   "1. ALWAYS describe exactly what you plan to create or change BEFORE calling any write tool.\n" +
   "2. ALWAYS wait for explicit user confirmation ('yes', 'go ahead', 'do it', 'confirm') before executing the write.\n" +
   "3. NEVER batch multiple writes without confirming each one individually.\n" +
-  "4. After a successful write, provide the Salesforce link to the created or updated record.\n" +
+  "4. After a successful write, link to the created or updated record (see LINKING TO RECORDS below).\n" +
   "5. If the user says 'no' or 'cancel', acknowledge and do not call the tool.\n\n" +
   "You can suggest write actions proactively when analysis reveals action items — for example, " +
   "after reviewing an account you might say 'I notice there are no follow-up tasks scheduled. " +
@@ -232,7 +233,45 @@ const BASE_SYSTEM_PROMPT =
   "- Suggest at most ONCE per conversation.\n" +
   "- Do not suggest if the user has already viewed a risk briefing in this conversation.\n" +
   "- When the user EXPLICITLY asks for a risk briefing or risk view, call the tool directly " +
-  "without asking for confirmation.";
+  "without asking for confirmation.\n\n" +
+  "MORTGAGE CALCULATOR:\n" +
+  "You have a render tool called render_mortgage_calculator that " +
+  "opens an interactive mortgage payment calculator as an overlay " +
+  "on the user's screen. Use it when:\n" +
+  "- The user asks to calculate, estimate, or compute a mortgage payment\n" +
+  "- The user asks 'what would X cost monthly?' or similar hypothetical mortgage questions\n" +
+  "- The user mentions specific mortgage parameters and you can extract values\n" +
+  "- The user wants to explore mortgage scenarios\n\n" +
+  "VALUE EXTRACTION:\n" +
+  "- '$500K home' → homePrice: 500000\n" +
+  "- '20% down' → downPaymentPercent: 20\n" +
+  "'$100,000 down' → downPaymentAmount: 100000\n" +
+  "- '7.5% rate' → interestRate: 7.5\n" +
+  "- '30-year mortgage' → loanTermYears: 30\n" +
+  "- '$500/month HOA' → monthlyHOA: 500\n\n" +
+  "For any value the user does NOT specify, omit it from the tool call. " +
+  "DO NOT ASK the user for missing values before calling the tool — just call it with what you have. " +
+  "After the calculator renders, you may comment briefly on the scenario but don't need to recompute.\n\n" +
+  "CREATING OPPORTUNITIES FROM THE CALCULATOR:\n" +
+  "You have a tool called create_mortgage_opportunity that creates a real Salesforce Opportunity " +
+  "from a mortgage scenario. This is a WRITE operation that permanently creates a record.\n\n" +
+  "MANDATORY CONFIRMATION FLOW:\n" +
+  "When the user asks to create an opportunity from a mortgage scenario " +
+  "(often triggered by a 'Create Opportunity' button that sends you the scenario details):\n" +
+  "1. DO NOT call create_mortgage_opportunity immediately.\n" +
+  "2. FIRST, describe the opportunity you propose to create:\n" +
+  "   - The auto-generated name (Mortgage — [Account] — [date])\n" +
+  "   - The Amount (the loan principal)\n" +
+  "   - Stage (Prospecting) and Close Date (30 days out)\n" +
+  "   - A note that the full scenario goes in the description\n" +
+  "3. ASK the user to confirm (e.g., 'Shall I create this opportunity?').\n" +
+  "4. ONLY after the user confirms ('yes', 'go ahead', 'create it', etc.) " +
+  "call create_mortgage_opportunity with the scenario values.\n" +
+  "5. After creation, confirm success and share the record details.\n\n" +
+  "If you don't have an accountId, ask the user which account the opportunity should belong to " +
+  "before proposing anything.\n\n" +
+  "This confirmation step is REQUIRED for all write operations. " +
+  "Never create, update, or delete Salesforce records without explicit user confirmation in the conversation.";
 
 const HOSTED_PROMPT_ADDENDUM =
   "\n\nYou have access to pre-built Salesforce prompt templates. " +
@@ -268,7 +307,7 @@ function buildAccountContextBlock(ctx: AccountContext): string {
   );
 }
 
-function buildSystemPrompt(mode: McpMode, resourceContext = "", accountContext?: AccountContext): string {
+function buildSystemPrompt(mode: McpMode, resourceContext = "", accountContext?: AccountContext, instanceUrl?: string): string {
   const base = mode === "hosted" ? BASE_SYSTEM_PROMPT + HOSTED_PROMPT_ADDENDUM : BASE_SYSTEM_PROMPT;
   const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const weekday = new Date().toLocaleDateString('en-US', { weekday: 'long' });
@@ -277,6 +316,19 @@ function buildSystemPrompt(mode: McpMode, resourceContext = "", accountContext?:
   ];
   if (accountContext) parts.push(buildAccountContextBlock(accountContext));
   parts.push(base);
+  if (instanceUrl) {
+    const baseUrl = instanceUrl.replace(/\/$/, "");
+    parts.push(
+      "LINKING TO RECORDS:\n" +
+      `The Salesforce org URL is ${baseUrl}. ` +
+      "When referencing any Salesforce record — whether just created, updated, or mentioned in conversation — " +
+      `always build the full Lightning URL: ${baseUrl}/lightning/r/{ObjectType}/{recordId}/view. ` +
+      "For example: a Contact with Id 003xx would be " +
+      `${baseUrl}/lightning/r/Contact/003xx/view. ` +
+      "NEVER use bare record IDs, relative paths, or placeholder URLs. " +
+      "Always render the link as markdown, e.g. [View in Salesforce](<full url>)."
+    );
+  }
   if (resourceContext) parts.push(resourceContext);
   return parts.join("\n\n");
 }
@@ -508,7 +560,8 @@ export async function POST(request: NextRequest) {
             promptNames = new Set(prompts.map(p => p.name));
             const dedupedTools = deduplicateHostedTools(normalizeTools(mcpTools));
             const anthropicToolList = sanitizeToolPropertyNames([...dedupedTools, ...normalizePrompts(prompts)]);
-            return anthropicToolList;
+            // Append route-level render tools after MCP normalization/dedup
+            return [...anthropicToolList, ...RENDER_TOOLS];
           }
 
           // Local mode: inject resources into system prompt.
@@ -518,7 +571,8 @@ export async function POST(request: NextRequest) {
           }
 
           promptNames = new Set();
-          return sanitizeToolPropertyNames(normalizeTools(mcpTools));
+          // Append route-level render tools after MCP normalization
+          return [...sanitizeToolPropertyNames(normalizeTools(mcpTools)), ...RENDER_TOOLS];
         };
 
         try {
@@ -555,6 +609,19 @@ export async function POST(request: NextRequest) {
         // Routes to getPrompt() for prompt-backed tools, callTool() for everything else.
         // Closes over mcpClient and promptNames so retries automatically use the refreshed client.
         const execTool = async (toolUse: Anthropic.ToolUseBlock): Promise<string> => {
+          // Route-level render tools: handled in-route, provider-independent
+          if (RENDER_TOOL_NAMES.has(toolUse.name)) {
+            const handled = handleRenderTool(
+              toolUse.name,
+              toolUse.input as Record<string, unknown>,
+              accountContext?.accountId
+            );
+            if (handled) {
+              pendingRenderDirective = handled.render;
+              return handled.text;
+            }
+          }
+
           if (promptNames.has(toolUse.name)) {
             const result = await mcpClient!.getPrompt({
               name: toolUse.name,
@@ -623,7 +690,7 @@ export async function POST(request: NextRequest) {
           | { kind: "mcpExpired"; toolUse: Anthropic.ToolUseBlock }
           | { kind: "mcpDropped"; toolUse: Anthropic.ToolUseBlock };
 
-        const systemPrompt = buildSystemPrompt(effectiveMode, resourceContext);
+        const systemPrompt = buildSystemPrompt(effectiveMode, resourceContext, undefined, session.instanceUrl ?? undefined);
 
         const callAnthropicWithRetry = async (
           params: Parameters<typeof anthropic.messages.stream>[0],

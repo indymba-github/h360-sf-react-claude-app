@@ -204,7 +204,9 @@ export async function sfCreate(
   fields: Record<string, unknown>
 ): Promise<{ id: string; instanceUrl: string }> {
   const conn = await getConnection();
-  const instanceUrl = conn.instanceUrl;
+  // Prefer the injected SF_INSTANCE_URL env var — conn.instanceUrl can
+  // reflect a local proxy in passthrough mode rather than the real org.
+  const instanceUrl = process.env["SF_INSTANCE_URL"] ?? conn.instanceUrl;
   const accessToken = conn.accessToken;
   if (!accessToken) throw new SalesforceAuthError("No access token available");
 
