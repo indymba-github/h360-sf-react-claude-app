@@ -196,3 +196,20 @@ For any changes, restart the dev server. Hot reload works for most changes but t
 | Adjust agent profile storage | `dashboard/lib/agents.ts` |
 | Adjust prompt library logic | `dashboard/lib/prompts.ts` |
 | Adjust notification polling | `dashboard/hooks/useNotificationPoller.ts` |
+
+## Customizing risk briefing thresholds
+
+The Account Risk Briefing applies the bank's risk policy via deterministic heuristics defined in `dashboard/lib/risk-heuristics.ts`. Editing a threshold changes how the agent assesses risk across all accounts — no model retraining, no code rebuild required beyond a dev server restart.
+
+For the full story (why it's deterministic, what each signal measures, how to customize, demo notes for SE conversations), see `docs/RISK_HEURISTICS.md`.
+
+Quick reference:
+
+| To change... | Edit |
+|---|---|
+| What counts as a "long engagement gap" | `ENGAGEMENT_HEURISTICS.daysSinceLastActivity` |
+| What counts as a "stalled" opportunity | `PIPELINE_HEURISTICS.stalledOppRatio.stalledThresholdDays` |
+| How aggressively losses flag pipeline risk | `PIPELINE_HEURISTICS.recentLossVolume.lookbackDays` |
+| Whether single-contact accounts flag as risk | `ENGAGEMENT_HEURISTICS.contactCount.lowMin` |
+
+Edit `dashboard/lib/risk-heuristics.ts`, restart the dashboard, ask the AI Assistant for a risk briefing — the new policy is active.
