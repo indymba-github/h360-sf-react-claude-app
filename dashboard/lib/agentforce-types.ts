@@ -1,3 +1,5 @@
+import type { RenderDirective } from './render-directives'
+
 export type AgentforceMessageType =
   | "Inform"
   | "Inquire"
@@ -82,6 +84,7 @@ export interface AgentforceNormalizedResponse {
   choices?: AgentforceRecordChoice[];
   results?: AgentforceResultGroup[];
   summaries?: AgentforceAggregateSummary[];
+  render?: RenderDirective | null;
 }
 
 function extractDisplayFields(

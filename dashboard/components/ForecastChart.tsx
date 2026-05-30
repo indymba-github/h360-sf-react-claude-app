@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Sector,
 } from "recharts";
+import type { PieSectorDataItem } from "recharts/types/polar/Pie";
 
 export interface ForecastBucket {
   label: string;
@@ -55,7 +56,8 @@ function fmtFull(v: number): string {
 }
 
 // Custom tooltip
-function DonutTooltip({ active, payload, total }: { active?: boolean; payload?: any[]; total: number }) {
+type RechartsPayloadEntry = { payload: ForecastBucket; value: number }
+function DonutTooltip({ active, payload, total }: { active?: boolean; payload?: RechartsPayloadEntry[]; total: number }) {
   if (!active || !payload?.length) return null;
   const d: ForecastBucket = payload[0].payload;
   const pct = total > 0 ? Math.round((d.amount / total) * 100) : 0;
@@ -78,7 +80,7 @@ function DonutTooltip({ active, payload, total }: { active?: boolean; payload?: 
 }
 
 // Active (hovered) shape — expands the segment outward
-function ActiveShape(props: any) {
+function ActiveShape(props: PieSectorDataItem) {
   const {
     cx, cy, innerRadius, outerRadius,
     startAngle, endAngle,

@@ -33,13 +33,14 @@ export async function POST(req: NextRequest) {
 
     const data = await res.json().catch(() => ({}));
     const message = Array.isArray(data)
-      ? data.map((e: any) => e.message ?? e.errorCode).join("; ")
+      ? data.map((e: { message?: string; errorCode?: string }) => e.message ?? e.errorCode).join("; ")
       : (data?.message ?? `Salesforce error ${res.status}`);
 
     return NextResponse.json({ error: message }, { status: res.status });
 
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("[dismiss-alert]", err);
-    return NextResponse.json({ error: err.message ?? "Request failed" }, { status: 502 });
+    const message = err instanceof Error ? err.message : "Request failed";
+    return NextResponse.json({ error: message }, { status: 502 });
   }
 }

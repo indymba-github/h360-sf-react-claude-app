@@ -29,7 +29,7 @@ export async function GET() {
   }
 
   const data = await res.json();
-  const alerts: SFNotification[] = (data.records ?? []).map((r: any) => ({
+  const alerts: SFNotification[] = (data.records ?? []).map((r: Record<string, unknown> & { What?: { Name?: string } }) => ({
     id:          r.Id,
     subject:     (r.Subject as string | null)?.replace(/^News Alert:\s*/i, "") ?? "(no subject)",
     priority:    r.Priority ?? null,

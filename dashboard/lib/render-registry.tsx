@@ -8,7 +8,8 @@ import { ComponentType } from 'react'
 import AccountRiskBriefing from '@/components/risk/AccountRiskBriefing'
 import MortgageCalculator from '@/components/mortgage/MortgageCalculator'
 
-const REGISTRY: Record<string, ComponentType<any>> = {
+const REGISTRY: Record<string, // eslint-disable-next-line @typescript-eslint/no-explicit-any
+ComponentType<any>> = {
   account_risk_briefing: AccountRiskBriefing,
   mortgage_calculator: MortgageCalculator,
 }
@@ -20,7 +21,8 @@ const REGISTRY: Record<string, ComponentType<any>> = {
  */
 export function resolveRenderComponent(
   name: string
-): ComponentType<any> | null {
+): // eslint-disable-next-line @typescript-eslint/no-explicit-any
+ComponentType<any> | null {
   const Component = REGISTRY[name]
   if (!Component) {
     console.warn(
