@@ -38,7 +38,6 @@ import { toMcpError } from "./utils/errors.js";
 import { RESOURCES, readResource } from "./resources.js";
 import { PROMPTS, getPrompt } from "./prompts.js";
 import { getNewsAlerts as mcpGetNewsAlerts, getNewsAlertsSchema, getTasks, getTasksSchema } from "./tools/tasks.js";
-import { renderAccountRiskBriefingTool, renderAccountRiskBriefingSchema, executeRenderAccountRiskBriefing } from "./tools/render.js";
 import { createMortgageOpportunityTool, executeCreateMortgageOpportunity } from "./tools/opportunity-write.js";
 
 const READ_ONLY: ToolAnnotations = {
@@ -366,7 +365,6 @@ const TOOLS = [
       },
     },
   },
-  renderAccountRiskBriefingTool,
   createMortgageOpportunityTool,
 ];
 
@@ -528,11 +526,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const input = getTasksSchema.parse(args ?? {});
         const { text, data } = await getTasks(input);
         return { content: makeContent(text, data) };
-      }
-
-      case "render_account_risk_briefing": {
-        const input = renderAccountRiskBriefingSchema.parse(args ?? {});
-        return await executeRenderAccountRiskBriefing(input);
       }
 
       case "create_mortgage_opportunity": {

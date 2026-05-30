@@ -105,7 +105,7 @@ function getPromptsForPathDefaults(pathname: string, accountName?: string): Sugg
   return DASHBOARD_PROMPTS;
 }
 
-function getPromptsFromStorage(pathname: string, accountName?: string): SuggestedPrompt[] | null {
+function getPromptsFromStorage(pathname: string): SuggestedPrompt[] | null {
   try {
     const raw = localStorage.getItem("prompts.library");
     if (!raw) return null;
@@ -124,6 +124,7 @@ function getPromptsFromStorage(pathname: string, accountName?: string): Suggeste
 
 // ── Tool icon ──────────────────────────────────────────────────────────────
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function ToolIcon({ name }: { name: string }) {
   if (name.includes("search") || name.includes("soql")) {
     return (
@@ -240,44 +241,6 @@ function AssistantMarkdown({ content }: { content: string }) {
 }
 
 // ── Tool call badges ───────────────────────────────────────────────────────
-
-function ToolCallsUsed({ toolCalls }: { toolCalls: ToolCall[] }) {
-  const [expanded, setExpanded] = useState(false);
-  const visible = expanded ? toolCalls : toolCalls.slice(0, 3);
-  const hasMore = toolCalls.length > 3;
-
-  return (
-    <div className="flex flex-wrap items-center gap-1 mb-1.5 max-w-[90%]">
-      {visible.map((tc, j) => (
-        <span
-          key={j}
-          className="inline-flex items-center gap-1 text-xs"
-          style={{
-            color: "var(--color-ink-soft)",
-            background: "var(--color-surface)",
-            border: "0.5px solid var(--color-border)",
-            padding: "1px 6px",
-            fontSize: "9px",
-            fontFamily: "var(--font-body)",
-            letterSpacing: "0.08em",
-          }}
-        >
-          <span style={{ color: "var(--color-accent)" }}><ToolIcon name={tc.name} /></span>
-          {tc.label}
-        </span>
-      ))}
-      {hasMore && !expanded && (
-        <button
-          onClick={() => setExpanded(true)}
-          className="text-xs px-1"
-          style={{ color: "var(--color-ink-soft)", fontSize: "9px" }}
-        >
-          +{toolCalls.length - 3} more
-        </button>
-      )}
-    </div>
-  );
-}
 
 // ── Tool phase indicator ───────────────────────────────────────────────────
 
@@ -859,7 +822,7 @@ export default function ChatPanel({
 
   // Load prompts from localStorage after hydration to avoid server/client mismatch
   useEffect(() => {
-    const fromStorage = getPromptsFromStorage(pathname, accountContextProp?.accountName);
+    const fromStorage = getPromptsFromStorage(pathname);
     if (fromStorage) setSuggestedPrompts(fromStorage);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1113,8 +1076,9 @@ export default function ChatPanel({
           agentId: activeAgentProfile?.agentId,
         }),
       });
-      const data = await res.json() as { reply?: string; type?: string; choices?: AgentforceRecordChoice[]; results?: AgentforceResultGroup[]; summaries?: AgentforceAggregateSummary[]; error?: string };
+      const data = await res.json() as { reply?: string; type?: string; choices?: AgentforceRecordChoice[]; results?: AgentforceResultGroup[]; summaries?: AgentforceAggregateSummary[]; render?: RenderDirective | null; error?: string };
       if (!res.ok || data.error) throw new Error(data.error ?? "Agentforce request failed");
+      if (data.render && onRender) onRender(data.render);
       setMessages((prev) => [...prev, {
         role: "assistant",
         content: data.reply ?? "",
@@ -1133,7 +1097,7 @@ export default function ChatPanel({
       setStatus(null);
       setLoading(false);
     }
-  }, [activeAgentProfile]);
+  }, [activeAgentProfile, onRender]);
 
   const handleChoiceSelected = useCallback(async (parentMessage: Message, choice: AgentforceRecordChoice) => {
     setMessages((prev) => prev.map((m) => m === parentMessage ? { ...m, choiceResolved: true } : m));
@@ -1152,8 +1116,9 @@ export default function ChatPanel({
           agentId: activeAgentProfile?.agentId,
         }),
       });
-      const data = await res.json() as { reply?: string; type?: string; choices?: AgentforceRecordChoice[]; results?: AgentforceResultGroup[]; summaries?: AgentforceAggregateSummary[]; error?: string };
+      const data = await res.json() as { reply?: string; type?: string; choices?: AgentforceRecordChoice[]; results?: AgentforceResultGroup[]; summaries?: AgentforceAggregateSummary[]; render?: RenderDirective | null; error?: string };
       if (!res.ok || data.error) throw new Error(data.error ?? "Agentforce request failed");
+      if (data.render && onRender) onRender(data.render);
       setMessages((prev) => [...prev, {
         role: "assistant",
         content: data.reply ?? "",
@@ -1172,7 +1137,7 @@ export default function ChatPanel({
       setStatus(null);
       setLoading(false);
     }
-  }, [activeAgentProfile]);
+  }, [activeAgentProfile, onRender]);
 
   const handleAgentSwitch = useCallback(async (profile: AgentProfile) => {
     if (profile.id === activeAgentProfile?.id) {
@@ -1341,7 +1306,7 @@ export default function ChatPanel({
         setLoading(false);
       }
     },
-    [loading, mcpMode, sendAgentforce]
+    [loading, mcpMode, sendAgentforce, onRender]
   );
 
   const handleRecordingChange = useCallback((recording: boolean) => {

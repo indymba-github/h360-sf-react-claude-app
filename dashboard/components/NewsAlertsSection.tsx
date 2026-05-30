@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import type { SFTask } from "@/lib/salesforce";
 import NewsAlertCard from "./NewsAlertCard";
 

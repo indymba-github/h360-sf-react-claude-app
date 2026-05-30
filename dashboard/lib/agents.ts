@@ -14,29 +14,32 @@ const CURRENT_VERSION = "v1";
 export async function getAgentProfiles(): Promise<AgentProfile[]> {
   if (typeof window === "undefined") return [];
 
-  const storedVersion = localStorage.getItem(VERSION_KEY);
   const stored = localStorage.getItem(STORAGE_KEY);
 
-  // Version matches and data exists — fast path.
-  if (storedVersion === CURRENT_VERSION && stored) {
-    try { return JSON.parse(stored) as AgentProfile[]; } catch {}
-  }
+  // Always fetch the current env default so we can detect drift.
+  const envAgentId = await fetchEnvDefault();
 
-  // Data exists but version key is wrong/absent — trust the data, update the version.
-  // This prevents re-seeding from env when the user has existing saved profiles,
-  // which would silently overwrite their edited agentIds with the env default.
+  // Data exists — parse it and check for env drift on the default profile.
   if (stored) {
     try {
       const parsed = JSON.parse(stored) as AgentProfile[];
+      // If the env value changed, update the stored default profile to match.
+      // User-added profiles (isDefault: false) are never touched.
+      if (envAgentId) {
+        const defaultIdx = parsed.findIndex((p) => p.id === "default");
+        if (defaultIdx !== -1 && parsed[defaultIdx].agentId !== envAgentId) {
+          parsed[defaultIdx] = { ...parsed[defaultIdx], agentId: envAgentId };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+        }
+      }
       localStorage.setItem(VERSION_KEY, CURRENT_VERSION);
       return parsed;
     } catch {}
   }
 
   // No stored data at all — seed from env.
-  const seed = await fetchEnvDefault();
-  const initial: AgentProfile[] = seed
-    ? [{ id: "default", label: "Default", agentId: seed, description: "Loaded from SF_AGENT_ID", isDefault: true }]
+  const initial: AgentProfile[] = envAgentId
+    ? [{ id: "default", label: "Default", agentId: envAgentId, description: "Loaded from SF_AGENT_ID", isDefault: true }]
     : [];
 
   localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));

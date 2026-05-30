@@ -10,6 +10,7 @@ import type { McpMode } from "@/lib/mcp-config";
 import { refreshSession, refreshMcpSession, PROACTIVE_REFRESH_THRESHOLD_MS } from "@/lib/token-refresh";
 import { hasRenderDirective, type RenderDirective } from "@/lib/render-directives";
 import { RENDER_TOOLS, RENDER_TOOL_NAMES, handleRenderTool } from "@/lib/render-tools";
+import { PIPELINE_HEURISTICS, heuristicsToPromptText } from "@/lib/risk-heuristics";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -212,28 +213,6 @@ const BASE_SYSTEM_PROMPT =
   "The questions should be concise (under 8 words each), specific to the current context, and " +
   "phrased as natural follow-ons to what you just said. Do not add this block if the response is " +
   "a write proposal (asking for confirmation before a write operation).\n\n" +
-  "PROACTIVE RISK BRIEFING:\n" +
-  "You have access to render_account_risk_briefing, which renders an interactive Account Risk " +
-  "Briefing card overlaid on the user's screen.\n\n" +
-  "When you fetch account data (using sf_get_account, sf_get_opportunities, " +
-  "sf_get_recent_activity, or similar tools) during normal conversation, examine the data for " +
-  "risk signals. Risk signals include:\n" +
-  "- No recorded activities in the last 30+ days\n" +
-  "- Multiple opportunities closed-lost in the last 180 days\n" +
-  "- Stalled open opportunities (no recent modifications)\n" +
-  "- Single-contact accounts (single relationship thread)\n" +
-  "- Open opportunities with no activity for a long time\n\n" +
-  "When you detect ONE OR MORE of these signals, OFFER a risk briefing AT THE END of your " +
-  "response using natural language, e.g.:\n" +
-  "\"I noticed [specific signal]. Would you like me to pull up a full risk briefing for this account?\"\n\n" +
-  "If the user responds affirmatively ('yes', 'sure', 'please', 'go ahead', 'show me', etc.), " +
-  "THEN call render_account_risk_briefing with the accountId.\n\n" +
-  "RULES:\n" +
-  "- Only suggest when you've genuinely seen a risk signal. Do not suggest on healthy accounts.\n" +
-  "- Suggest at most ONCE per conversation.\n" +
-  "- Do not suggest if the user has already viewed a risk briefing in this conversation.\n" +
-  "- When the user EXPLICITLY asks for a risk briefing or risk view, call the tool directly " +
-  "without asking for confirmation.\n\n" +
   "MORTGAGE CALCULATOR:\n" +
   "You have a render tool called render_mortgage_calculator that " +
   "opens an interactive mortgage payment calculator as an overlay " +
@@ -329,8 +308,52 @@ function buildSystemPrompt(mode: McpMode, resourceContext = "", accountContext?:
       "Always render the link as markdown, e.g. [View in Salesforce](<full url>)."
     );
   }
+  parts.push(buildRiskBriefingGuidance());
   if (resourceContext) parts.push(resourceContext);
   return parts.join("\n\n");
+}
+
+function buildRiskBriefingGuidance(): string {
+  const lookback = PIPELINE_HEURISTICS.recentLossVolume.lookbackDays;
+  return (
+    "ACCOUNT RISK BRIEFING:\n\n" +
+    "You have a tool called render_account_risk_briefing that displays a Risk Briefing card " +
+    "overlaid on the user's screen. Use it when the user asks for a risk briefing, risk view, " +
+    "or risk dashboard on an account. Also OFFER a briefing proactively when, during normal " +
+    "conversation, you fetch account data and notice risk signals (no recent activity, multiple " +
+    "closed-lost opportunities, stalled opportunities, single-contact accounts). When offering " +
+    "proactively, ask the user to confirm before producing the briefing. Suggest at most ONCE " +
+    "per conversation and do not suggest if the user has already viewed a briefing.\n\n" +
+    "PROCESS — follow these steps every time:\n\n" +
+    "1. Gather data for the account using available tools. You need:\n" +
+    "   a) Past-dated Tasks (Subject, ActivityDate) for the account\n" +
+    "   b) Past-dated Events (Subject, ActivityDate) for the account\n" +
+    "   c) Contact count for the account\n" +
+    "   d) Open Opportunities (Name, StageName, LastModifiedDate) — IsClosed = FALSE\n" +
+    `   e) Closed-Lost Opportunities (Name, CloseDate) in the last ${lookback} days\n` +
+    "   Use whatever tools are available. In Hosted mode use a SOQL query tool; in Local mode " +
+    "   use specific tools like sf_get_opportunities, sf_get_tasks, etc.\n\n" +
+    "2. Apply the bank's risk heuristics (below) DETERMINISTICALLY. Same data MUST yield the " +
+    "   same severity every time. Do not guess — compute from the rules.\n\n" +
+    "3. Determine contributing factors. Include a factor entry ONLY for signals that fired " +
+    "   Medium or High. Use clear human phrasing, for example:\n" +
+    "   - \"Last touchpoint was N days ago\"\n" +
+    "   - \"Only N activities in the last 90 days\"\n" +
+    "   - \"Single-threaded relationship — N contact on file\"\n" +
+    "   - \"X of Y open opportunities stalled (no update in 30+ days)\"\n" +
+    "   - \"N opportunities lost in the last 180 days\"\n" +
+    "   - \"No open opportunities and N closed-lost in last 180 days\"\n\n" +
+    "4. Build the metrics arrays (three per dimension):\n" +
+    "   - Engagement: Days Since Touch (or N/A), Activities (90d), Contacts\n" +
+    "   - Pipeline: Open Opps, Stalled, Closed Lost (180d)\n\n" +
+    "5. Write ONE-SENTENCE natural summaries per dimension (the only agent-written part). " +
+    "   Everything else — severity, factors, metrics — is mechanical.\n\n" +
+    "6. Handle empty states. If an account has zero activities and zero contacts (engagement) " +
+    "   or zero open opps and zero recent losses (pipeline), set emptyState: true, " +
+    "   severity: 'unknown', a summary describing the data gap, and OMIT metrics/factors.\n\n" +
+    "7. Call render_account_risk_briefing with the structured assessment.\n\n" +
+    heuristicsToPromptText()
+  );
 }
 
 // Human-readable labels for completed tool calls (shown as badges on the message)
@@ -351,6 +374,7 @@ const TOOL_LABELS: Record<string, string> = {
 };
 
 // Present-tense status shown while a tool is executing
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const TOOL_STATUS: Record<string, string> = {
   sf_list_accounts: "Listing accounts…",
   sf_get_account: "Looking up account…",

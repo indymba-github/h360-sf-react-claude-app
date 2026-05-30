@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, type DragEvent } from "react";
 import SectionHeader from "@/components/SectionHeader";
 import PresetPreview from "@/components/PresetPreview";
-import { getPresets, savePresets, restoreSeeded, newPresetId, SEEDED_PRESETS, type DemoPack } from "@/lib/demoPacks";
+import { getPresets, savePresets, restoreSeeded, newPresetId, type DemoPack } from "@/lib/demoPacks";
 import { applyAccentTokens } from "@/lib/brandColors";
 import { getProvidersConfig, setDefaultProvider, PROVIDER_LABELS, type Provider } from "@/lib/providers";
 import { getAgentProfiles, saveAgentProfiles, getActiveAgentProfile, setActiveAgentProfile, isValidAgentId, type AgentProfile } from "@/lib/agents";
@@ -12,7 +12,6 @@ import { getAgentProfiles, saveAgentProfiles, getActiveAgentProfile, setActiveAg
 
 const LS_SETTINGS = "settings";
 const LS_PROMPTS  = "prompts.library";
-const LS_PROVIDER = "ai-panel.default-provider";
 
 interface StoredSettings {
   accentColor?: string;

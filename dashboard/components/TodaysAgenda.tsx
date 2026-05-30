@@ -26,10 +26,6 @@ export interface AgendaEvent {
 
 export type AgendaItem = AgendaTask | AgendaEvent;
 
-function formatTime(iso: string | null, isAllDay: boolean): string {
-  if (isAllDay || !iso) return "";
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-}
 
 function formatTimeRange(start: string | null, end: string | null, isAllDay: boolean): string {
   if (isAllDay) return "All day";
