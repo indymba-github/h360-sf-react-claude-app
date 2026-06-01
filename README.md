@@ -53,19 +53,19 @@ See `docs/SALESFORCE_SETUP.md` for the Salesforce-side configuration (External C
 
 ## Architecture overview
 
-┌─────────────────────────────────────────────────────────┐
-│           Next.js App (React frontend)                  │
-│                                                         │
-│   Dashboard     Account Detail     AI Assistant Panel   │
-│      ↓               ↓                    ↓             │
-│   ───────────────────────────────────────────────────   │
-│           Next.js API Routes (backend)                  │
-│   ───────────────────────────────────────────────────   │
-│      ↓               ↓                    ↓             │
-│   Salesforce      Custom MCP        Anthropic Claude /  │
-│   REST API        Server (stdio)    Agentforce Agent    │
-│                                     API                 │
-└─────────────────────────────────────────────────────────┘
+      ┌─────────────────────────────────────────────────────────┐
+      │           Next.js App (React frontend)                  │
+      │                                                         │
+      │   Dashboard     Account Detail     AI Assistant Panel   │
+      │      ↓               ↓                    ↓             │
+      │   ───────────────────────────────────────────────────   │
+      │           Next.js API Routes (backend)                  │
+      │   ───────────────────────────────────────────────────   │
+      │      ↓               ↓                    ↓             │
+      │   Salesforce      Custom MCP        Anthropic Claude /  │
+      │   REST API        Server (stdio)    Agentforce Agent    │
+      │                                     API                 │
+      └─────────────────────────────────────────────────────────┘
 
 The custom MCP server (`salesforce-mcp-server/`) is a separate Node.js process exposing Salesforce data as MCP tools. The dashboard launches it as a child process when Local mode is active. JWT Bearer authentication uses a self-signed certificate.
 
