@@ -716,3 +716,104 @@ export async function getDashboardKpis(
     openCasesCount: casesResult?.records[0]?.cnt ?? 0,
   };
 }
+
+// ── FSC Core: Financial Accounts ──────────────────────────────────────────
+
+import type {
+  FinancialAccount,
+  FinancialAccountBalance,
+  FinancialAccountParty,
+  FinancialAccountWithRole,
+  FinancialAccountTransaction,
+} from "./financial-accounts";
+
+/**
+ * Returns financial accounts where the given Account is an active party,
+ * joined with the role that account holds on each one.
+ */
+export async function getFinancialAccountsForAccount(
+  instanceUrl: string,
+  accessToken: string,
+  accountId: string
+): Promise<FinancialAccountWithRole[]> {
+  const safe = escapeSOQL(accountId);
+
+  let parties: FinancialAccountParty[];
+  try {
+    parties = await sfQuery<FinancialAccountParty>(
+      instanceUrl,
+      accessToken,
+      `SELECT Id, FinancialAccountId, Role, RoleStartDate, RoleEndDate, IsRoleActive, AccountId, ContactId FROM FinancialAccountParty WHERE AccountId = '${safe}' AND IsRoleActive = true ORDER BY Role ASC`
+    );
+  } catch (err) {
+    console.error("[getFinancialAccountsForAccount] parties query failed:", err);
+    return [];
+  }
+
+  if (parties.length === 0) return [];
+
+  const idsClause = parties.map((p) => `'${escapeSOQL(p.FinancialAccountId)}'`).join(",");
+
+  let accounts: FinancialAccount[];
+  try {
+    accounts = await sfQuery<FinancialAccount>(
+      instanceUrl,
+      accessToken,
+      `SELECT Id, Name, FinancialAccountNumber, Type, Status, OpeningDate, ClosingDate, MaturityDate, RenewalDate, PaymentDueDate, PrincipalAmount, TotalOutstandingAmount, AmountDue, InterestRate, InterestType, DownPaymentAmount, Term, CreditLimit, PrincipalPaidYearToDate, InterestPaidYearToDate, IsOverdraftAllowed, IsManaged, BankerId, BranchUnitId, ProductId, CurrencyIsoCode FROM FinancialAccount WHERE Id IN (${idsClause}) ORDER BY Type ASC, Name ASC`
+    );
+  } catch (err) {
+    console.error("[getFinancialAccountsForAccount] accounts query failed:", err);
+    return [];
+  }
+
+  let balances: FinancialAccountBalance[] = [];
+  try {
+    balances = await sfQuery<FinancialAccountBalance>(
+      instanceUrl,
+      accessToken,
+      `SELECT Id, FinancialAccountId, Amount, Type, BalanceAsOfDate, SystemModstamp FROM FinancialAccountBalance WHERE FinancialAccountId IN (${idsClause}) AND Type = 'Total Balance' ORDER BY BalanceAsOfDate DESC NULLS LAST, SystemModstamp DESC`
+    );
+  } catch (err) {
+    console.error("[getFinancialAccountsForAccount] balances query failed:", err);
+  }
+
+  const latestBalanceByFAId = new Map<string, FinancialAccountBalance>();
+  for (const bal of balances) {
+    if (!latestBalanceByFAId.has(bal.FinancialAccountId)) {
+      latestBalanceByFAId.set(bal.FinancialAccountId, bal);
+    }
+  }
+
+  const partyByFAId = new Map(parties.map((p) => [p.FinancialAccountId, p]));
+  return accounts.map((fa) => {
+    const bal = latestBalanceByFAId.get(fa.Id);
+    return {
+      ...fa,
+      Role: partyByFAId.get(fa.Id)?.Role ?? "Unknown",
+      PartyId: partyByFAId.get(fa.Id)?.Id ?? "",
+      CurrentBalance: bal?.Amount ?? null,
+      BalanceAsOfDate: bal?.BalanceAsOfDate ?? null,
+    };
+  });
+}
+
+/**
+ * Returns the most recent transactions for a single financial account.
+ */
+export async function getTransactionsForFinancialAccount(
+  instanceUrl: string,
+  accessToken: string,
+  financialAccountId: string,
+  limit = 25
+): Promise<FinancialAccountTransaction[]> {
+  const safe = escapeSOQL(financialAccountId);
+  try {
+    return await sfQuery<FinancialAccountTransaction>(
+      instanceUrl,
+      accessToken,
+      `SELECT Id, Name, FinancialAccountId, Amount, DebitCreditIndicator, TransactionDate, PostedDate, Description, TransactionCode, Type, SubType, Status FROM FinancialAccountTransaction WHERE FinancialAccountId = '${safe}' ORDER BY TransactionDate DESC NULLS LAST, PostedDate DESC NULLS LAST LIMIT ${limit}`
+    );
+  } catch {
+    return [];
+  }
+}

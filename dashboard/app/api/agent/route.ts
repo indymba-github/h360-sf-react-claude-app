@@ -83,8 +83,9 @@ async function startSession(accessToken: string, agentId: string): Promise<strin
 
   let res = await attempt(false);
 
-  // Some agents (those not tied to a user-context Connected App) require bypassUser: true.
-  if (res.status === 412) {
+  // Retry with bypassUser: true when the org has no "Run As" user on the Connected App
+  // (400 "Invalid user ID") or when the agent config requires it (412 "Invalid Config").
+  if (res.status === 412 || res.status === 400) {
     res = await attempt(true);
   }
 

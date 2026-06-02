@@ -1,7 +1,8 @@
 import { redirect, notFound } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { getEffectiveMcpMode } from "@/lib/mcp-config";
-import { sfQuery, getAccount, getNewsAlerts, type SFOpportunity, type SFContact, type SFCase } from "@/lib/salesforce";
+import { sfQuery, getAccount, getNewsAlerts, getFinancialAccountsForAccount, type SFOpportunity, type SFContact, type SFCase } from "@/lib/salesforce";
+import FinancialAccountsSection from "@/components/financial/FinancialAccountsSection";
 import { formatCurrency, formatCount } from "@/lib/format";
 import PageHeading from "@/components/PageHeading";
 import AccountDetailClient from "./AccountDetailClient";
@@ -68,7 +69,7 @@ export default async function AccountDetailPage({
   const { id } = await params;
   const safeId = id.replace(/['"\\]/g, "");
 
-  const [accountRes, oppsRes, contactsRes, casesRes, newsRes] = await Promise.allSettled([
+  const [accountRes, oppsRes, contactsRes, casesRes, newsRes, financialAccountsRes] = await Promise.allSettled([
     getAccount(session.instanceUrl, session.accessToken, safeId),
     sfQuery<SFOpportunity>(
       session.instanceUrl, session.accessToken,
@@ -83,6 +84,7 @@ export default async function AccountDetailPage({
       `SELECT Id, CaseNumber, Subject, Status, Priority, CreatedDate FROM Case WHERE AccountId = '${safeId}' ORDER BY CreatedDate DESC LIMIT 5`
     ),
     getNewsAlerts(session.instanceUrl, session.accessToken, safeId),
+    getFinancialAccountsForAccount(session.instanceUrl, session.accessToken, safeId),
   ]);
 
   const acct = accountRes.status === "fulfilled" ? accountRes.value : null;
@@ -91,7 +93,8 @@ export default async function AccountDetailPage({
   const opps       = oppsRes.status === "fulfilled" ? oppsRes.value : [];
   const contacts   = contactsRes.status === "fulfilled" ? contactsRes.value : [];
   const cases      = casesRes.status === "fulfilled" ? casesRes.value : [];
-  const newsAlerts = newsRes.status === "fulfilled" ? newsRes.value : [];
+  const newsAlerts        = newsRes.status === "fulfilled" ? newsRes.value : [];
+  const financialAccounts = financialAccountsRes.status === "fulfilled" ? financialAccountsRes.value : [];
 
   const openOpps   = opps.filter((o) => !o.StageName.toLowerCase().startsWith("closed"));
   const openCases  = cases.filter((c) => c.Status !== "Closed");
@@ -290,11 +293,23 @@ export default async function AccountDetailPage({
             )}
           </div>
 
-          {/* 03 Cases */}
+          {/* 04 Financial Accounts */}
           <div className="mb-8">
             <div className="mb-4">
               <SectionHeader
-                number="03"
+                number="04"
+                title="Financial Accounts"
+                meta={financialAccounts.length > 0 ? `${financialAccounts.length} account${financialAccounts.length !== 1 ? "s" : ""}` : undefined}
+              />
+            </div>
+            <FinancialAccountsSection accounts={financialAccounts} />
+          </div>
+
+          {/* 05 Cases */}
+          <div className="mb-8">
+            <div className="mb-4">
+              <SectionHeader
+                number="05"
                 title="Cases"
                 meta={cases.length > 0 ? `${openCases.length} open · ${closedCases.length} closed` : undefined}
               />
