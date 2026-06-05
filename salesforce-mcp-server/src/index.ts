@@ -28,8 +28,6 @@ import {
 } from "./tools/write.js";
 import {
   getFinancialAccounts, getFinancialAccountsSchema,
-  getFinancialHoldings, getFinancialHoldingsSchema,
-  getAssetsLiabilities, getAssetsLiabilitiesSchema,
   getClientSummary, getClientSummarySchema,
   getFinancialAccountRoles, getFinancialAccountRolesSchema,
   getAccountRelationships, getAccountRelationshipsSchema,
@@ -39,6 +37,7 @@ import { RESOURCES, readResource } from "./resources.js";
 import { PROMPTS, getPrompt } from "./prompts.js";
 import { getNewsAlerts as mcpGetNewsAlerts, getNewsAlertsSchema, getTasks, getTasksSchema } from "./tools/tasks.js";
 import { createMortgageOpportunityTool, executeCreateMortgageOpportunity } from "./tools/opportunity-write.js";
+import { askAgentforce, askAgentforceSchema } from "./tools/agentforce.js";
 
 const READ_ONLY: ToolAnnotations = {
   readOnlyHint: true,
@@ -195,32 +194,6 @@ const TOOLS = [
     },
   },
   {
-    name: "sf_get_financial_holdings",
-    description: "Get investment holdings within a financial account. Shows securities, shares, market value, and gain/loss.",
-    annotations: READ_ONLY,
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        financial_account_id: { type: "string", description: "Financial Account record ID" },
-        limit: { type: "integer", minimum: 1, maximum: 50, default: 20, description: "Records to return (1-50, default 20)" },
-      },
-      required: ["financial_account_id"],
-    },
-  },
-  {
-    name: "sf_get_assets_liabilities",
-    description: "Get a client's assets and liabilities for net worth analysis. Includes real estate, vehicles, debts, and other assets.",
-    annotations: READ_ONLY,
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        account_id: { type: "string", description: "Salesforce Account ID of the primary owner" },
-        limit: { type: "integer", minimum: 1, maximum: 50, default: 20, description: "Records to return (1-50, default 20)" },
-      },
-      required: ["account_id"],
-    },
-  },
-  {
     name: "sf_get_client_summary",
     description: "Get a comprehensive financial summary for a client. Aggregates financial accounts by type, calculates total balances, and provides a net worth snapshot. Use this when someone asks for an overview of a client's financial position.",
     annotations: READ_ONLY,
@@ -366,6 +339,18 @@ const TOOLS = [
     },
   },
   createMortgageOpportunityTool,
+  {
+    name: "ask_agentforce",
+    description: "Consult the Banking Service Employee Assistance Agentforce agent for specialized banking knowledge or read-only data queries. Use when questions benefit from Trust-Layer-governed knowledge or customer-servicing data lookups.",
+    annotations: READ_ONLY,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        question: { type: "string", description: "The question to ask the Agentforce agent. Be specific — the agent has no context from this conversation unless you provide it." },
+      },
+      required: ["question"],
+    },
+  },
 ];
 
 // ── Handler: list tools ────────────────────────────────────────────────────
@@ -462,18 +447,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: makeContent(text, data) };
       }
 
-      case "sf_get_financial_holdings": {
-        const input = getFinancialHoldingsSchema.parse(args ?? {});
-        const { text, data } = await getFinancialHoldings(input);
-        return { content: makeContent(text, data) };
-      }
-
-      case "sf_get_assets_liabilities": {
-        const input = getAssetsLiabilitiesSchema.parse(args ?? {});
-        const { text, data } = await getAssetsLiabilities(input);
-        return { content: makeContent(text, data) };
-      }
-
       case "sf_get_client_summary": {
         const input = getClientSummarySchema.parse(args ?? {});
         const { text, data } = await getClientSummary(input);
@@ -532,6 +505,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return await executeCreateMortgageOpportunity(
           (args ?? {}) as Parameters<typeof executeCreateMortgageOpportunity>[0]
         );
+      }
+
+      case "ask_agentforce": {
+        const input = askAgentforceSchema.parse(args ?? {});
+        const { text } = await askAgentforce(input);
+        return { content: [{ type: "text" as const, text }] };
       }
 
       default:

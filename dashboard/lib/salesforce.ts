@@ -462,20 +462,21 @@ export async function getWinLossStats(
 export interface SFFinancialAccount {
   Id: string;
   Name: string;
-  FinServ__FinancialAccountNumber__c: string | null;
-  FinServ__FinancialAccountType__c: string | null;
-  FinServ__Status__c: string | null;
-  FinServ__Balance__c: number | null;
-  FinServ__InterestRate__c: number | null;
-  FinServ__APY__c: number | null;
-  FinServ__OpenDate__c: string | null;
-  FinServ__LoanAmount__c: number | null;
-  FinServ__PrincipalBalance__c: number | null;
-  FinServ__PaymentAmount__c: number | null;
-  FinServ__PaymentDueDate__c: string | null;
-  FinServ__Nickname__c: string | null;
-  FinServ__HoldingCount__c: number | null;
-  RecordType: { Name: string } | null;
+  FinancialAccountNumber: string | null;
+  Type: string | null;
+  Status: string | null;
+  OpeningDate: string | null;
+  ClosingDate: string | null;
+  InterestRate: number | null;
+  InterestType: string | null;
+  TotalOutstandingAmount: number | null;
+  PrincipalAmount: number | null;
+  AmountDue: number | null;
+  PaymentDueDate: string | null;
+  CreditLimit: number | null;
+  MaturityDate: string | null;
+  IsOverdraftAllowed: boolean | null;
+  IsHeldAway: boolean | null;
 }
 
 export async function getFinancialAccounts(
@@ -485,17 +486,22 @@ export async function getFinancialAccounts(
 ): Promise<SFFinancialAccount[]> {
   const safe = accountId.replace(/['"\\]/g, "");
   try {
+    const parties = await sfQuery<{ FinancialAccountId: string }>(
+      instanceUrl,
+      accessToken,
+      `SELECT FinancialAccountId FROM FinancialAccountParty WHERE AccountId = '${safe}' AND Role = 'Owner' AND IsRoleActive = true`
+    );
+    if (parties.length === 0) return [];
+    const idsClause = parties.map((p) => `'${escapeSOQL(p.FinancialAccountId)}'`).join(",");
     return await sfQuery<SFFinancialAccount>(
       instanceUrl,
       accessToken,
-      `SELECT Id, Name, FinServ__FinancialAccountNumber__c, FinServ__FinancialAccountType__c,
-              FinServ__Status__c, FinServ__Balance__c, FinServ__InterestRate__c, FinServ__APY__c,
-              FinServ__OpenDate__c, FinServ__LoanAmount__c, FinServ__PrincipalBalance__c,
-              FinServ__PaymentAmount__c, FinServ__PaymentDueDate__c, FinServ__Nickname__c,
-              FinServ__HoldingCount__c, RecordType.Name
-       FROM FinServ__FinancialAccount__c
-       WHERE FinServ__PrimaryOwner__c = '${safe}'
-       ORDER BY FinServ__Balance__c DESC NULLS LAST`
+      `SELECT Id, Name, FinancialAccountNumber, Type, Status,
+              OpeningDate, ClosingDate, InterestRate, InterestType,
+              TotalOutstandingAmount, PrincipalAmount, AmountDue, PaymentDueDate,
+              CreditLimit, MaturityDate, IsOverdraftAllowed, IsHeldAway
+       FROM FinancialAccount
+       WHERE Id IN (${idsClause})`
     );
   } catch {
     return [];
@@ -505,12 +511,13 @@ export async function getFinancialAccounts(
 export interface SFFinancialAccountRole {
   Id: string;
   Name: string;
-  FinServ__Role__c: string | null;
-  FinServ__Active__c: boolean;
-  FinServ__RelatedAccount__c: string | null;
-  FinServ__RelatedAccount__r: { Name: string } | null;
-  FinServ__RelatedContact__c: string | null;
-  FinServ__RelatedContact__r: { Name: string } | null;
+  FinancialAccountId: string;
+  AccountId: string | null;
+  ContactId: string | null;
+  Role: string | null;
+  IsRoleActive: boolean;
+  RoleStartDate: string | null;
+  RoleEndDate: string | null;
 }
 
 export async function getFinancialAccountRoles(
@@ -523,13 +530,14 @@ export async function getFinancialAccountRoles(
     return await sfQuery<SFFinancialAccountRole>(
       instanceUrl,
       accessToken,
-      `SELECT Id, Name, FinServ__Role__c,
-              FinServ__RelatedAccount__c, FinServ__RelatedAccount__r.Name,
-              FinServ__RelatedContact__c, FinServ__RelatedContact__r.Name,
-              FinServ__Active__c
-       FROM FinServ__FinancialAccountRole__c
-       WHERE FinServ__FinancialAccount__c = '${safe}'
-       AND FinServ__Active__c = true`
+      `SELECT Id, Name,
+              FinancialAccountId,
+              AccountId, ContactId,
+              Role, IsRoleActive,
+              RoleStartDate, RoleEndDate
+       FROM FinancialAccountParty
+       WHERE FinancialAccountId = '${safe}'
+         AND IsRoleActive = true`
     );
   } catch {
     return [];
@@ -538,14 +546,15 @@ export async function getFinancialAccountRoles(
 
 export interface SFAccountRelationship {
   Id: string;
-  FinServ__Active__c: boolean;
-  FinServ__AssociationType__c: string | null;
-  FinServ__Account__c: string;
-  FinServ__Account__r: { Name: string } | null;
-  FinServ__RelatedAccount__c: string;
-  FinServ__RelatedAccount__r: { Name: string } | null;
-  FinServ__Role__r: { Name: string } | null;
-  FinServ__InverseRelationship__r: { FinServ__Role__r: { Name: string } | null } | null;
+  AccountId: string;
+  Account: { Name: string } | null;
+  RelatedAccountId: string;
+  RelatedAccount: { Name: string } | null;
+  IsActive: boolean;
+  HierarchyType: string | null;
+  StartDate: string | null;
+  EndDate: string | null;
+  PartyRoleRelationId: string | null;
 }
 
 export async function getAccountRelationships(
@@ -559,16 +568,14 @@ export async function getAccountRelationships(
       instanceUrl,
       accessToken,
       `SELECT Id,
-              FinServ__Account__c, FinServ__Account__r.Name,
-              FinServ__RelatedAccount__c, FinServ__RelatedAccount__r.Name,
-              FinServ__AssociationType__c,
-              FinServ__Role__r.Name,
-              FinServ__InverseRelationship__r.FinServ__Role__r.Name,
-              FinServ__Active__c
-       FROM FinServ__AccountAccountRelation__c
-       WHERE (FinServ__Account__c = '${safe}'
-         OR FinServ__RelatedAccount__c = '${safe}')
-       AND FinServ__Active__c = true`
+              AccountId, Account.Name,
+              RelatedAccountId, RelatedAccount.Name,
+              IsActive, HierarchyType,
+              StartDate, EndDate,
+              PartyRoleRelationId
+       FROM AccountAccountRelation
+       WHERE (AccountId = '${safe}' OR RelatedAccountId = '${safe}')
+         AND IsActive = true`
     );
   } catch {
     return [];
@@ -795,6 +802,152 @@ export async function getFinancialAccountsForAccount(
       BalanceAsOfDate: bal?.BalanceAsOfDate ?? null,
     };
   });
+}
+
+/**
+ * Returns the most recent Total Balance record for a single financial account.
+ */
+export async function getFinancialAccountBalance(
+  instanceUrl: string,
+  accessToken: string,
+  financialAccountId: string
+): Promise<FinancialAccountBalance | null> {
+  const safe = escapeSOQL(financialAccountId);
+  try {
+    const rows = await sfQuery<FinancialAccountBalance>(
+      instanceUrl,
+      accessToken,
+      `SELECT Id, FinancialAccountId, Amount, Type, BalanceAsOfDate, CurrencyIsoCode FROM FinancialAccountBalance WHERE FinancialAccountId = '${safe}' AND Type = 'Total Balance' ORDER BY BalanceAsOfDate DESC NULLS LAST, SystemModstamp DESC LIMIT 1`
+    );
+    return rows[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Salesforce Models API (Einstein Trust Layer) ─────────────────────────
+
+export interface SfModelsChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface SfModelsChatResult {
+  text: string;
+}
+
+async function getModelsAccessToken(): Promise<string> {
+  const tokenUrl = `${process.env.SF_LOGIN_URL?.replace(/\/$/, "")}/services/oauth2/token`;
+  const res = await fetch(tokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: process.env.SF_MODELS_CLIENT_ID!,
+      client_secret: process.env.SF_MODELS_CLIENT_SECRET!,
+    }),
+  });
+  if (!res.ok) {
+    const errBody = await res.text();
+    throw new Error(`Models API auth failed (${res.status}): ${errBody}`);
+  }
+  const data = await res.json();
+  return data.access_token;
+}
+
+/**
+ * Sends a chat conversation to the Salesforce Models API (chat-generations
+ * endpoint) via the api.salesforce.com gateway using a dedicated Client
+ * Credentials token. The request routes through Einstein Trust Layer.
+ *
+ * @param messages      The conversation so far
+ * @param modelApiName  The sfdc_ai__ API name from the Models catalog
+ */
+export async function sfModelsChat(
+  messages: SfModelsChatMessage[],
+  modelApiName: string,
+): Promise<SfModelsChatResult> {
+  // Bedrock (via Models API) rejects empty-content messages. Filter them out
+  // and enforce valid turn order before the request leaves this function.
+  const filtered = messages
+    .map((m) => ({ role: m.role, content: m.content?.trim() ?? "" }))
+    .filter((m) => m.content.length > 0);
+
+  // Must end with a user turn.
+  while (filtered.length > 0 && filtered[filtered.length - 1].role === "assistant") {
+    filtered.pop();
+  }
+  // Must not start with an assistant turn.
+  while (filtered.length > 0 && filtered[0].role === "assistant") {
+    filtered.shift();
+  }
+
+  if (filtered.length === 0) {
+    throw new Error("No valid messages to send to Salesforce Models API");
+  }
+
+  const accessToken = await getModelsAccessToken();
+  const url =
+    `https://api.salesforce.com/einstein/platform/v1/models/` +
+    `${encodeURIComponent(modelApiName)}/chat-generations`;
+
+  console.log('[sf-models] === REQUEST ===');
+  console.log('URL:', url);
+  console.log('Model:', modelApiName);
+  console.log('Token (first 50 chars):', accessToken.substring(0, 50));
+  console.log('Body messages count:', filtered.length);
+  console.log('Body roles:', filtered.map((m) => m.role).join(','));
+  console.log('Body last message:', JSON.stringify(filtered[filtered.length - 1], null, 2));
+  console.log('[sf-models] === END REQUEST ===');
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json;charset=utf-8",
+      "x-sfdc-app-context": "EinsteinGPT",
+      "x-client-feature-id": "ai-platform-models-connected-app",
+    },
+    body: JSON.stringify({
+      messages: filtered,
+      tags: {},
+    }),
+    cache: "no-store",
+  });
+
+  const responseText = await res.text();
+
+  console.log('[sf-models] === RESPONSE ===');
+  console.log('Status:', res.status, res.statusText);
+  console.log('OK:', res.ok);
+  console.log('Body:', responseText);
+  console.log('[sf-models] === END RESPONSE ===');
+
+  if (!res.ok) {
+    throw new Error(`Salesforce Models API error ${res.status}: ${responseText}`);
+  }
+
+  const data = JSON.parse(responseText) as {
+    generationDetails?: { generations?: Array<{ content?: string; role?: string }> };
+    generations?: Array<{ text?: string; content?: string }>;
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+
+  const generations = data.generationDetails?.generations ?? [];
+  const text =
+    generations.map((g) => g.content ?? "").filter((s) => s.length > 0).join("\n\n") ||
+    (data.generations?.[0]?.text ??
+    data.generations?.[0]?.content ??
+    data.choices?.[0]?.message?.content ??
+    "");
+
+  console.log('[sf-models] === EXTRACTED ===');
+  console.log('Generations count:', generations.length);
+  console.log('Extracted text:', text);
+  console.log('Text length:', text.length);
+  console.log('[sf-models] === END EXTRACTED ===');
+
+  return { text: text || "(Models API returned no text.)" };
 }
 
 /**

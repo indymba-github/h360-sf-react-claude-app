@@ -8,6 +8,10 @@ export type SFConnection = Connection;
 // All custom record types must be compatible with jsforce's Record shape
 export type SFQueryRecord = SFRecord & { [field: string]: unknown };
 
+// FSC on Core objects (FinancialAccount, FinancialAccountParty, etc.) require v60+
+// jsforce version field uses bare number (no 'v' prefix)
+const JSFORCE_API_VERSION = "62.0";
+
 // ── Config ─────────────────────────────────────────────────────────────────
 
 interface JwtConfig {
@@ -125,6 +129,7 @@ async function createConnection(): Promise<SFConnection> {
   const conn = new Connection({
     instanceUrl,
     accessToken,
+    version: JSFORCE_API_VERSION,
     // jsforce calls refreshFn automatically on INVALID_SESSION_ID.
     // We re-sign a fresh JWT assertion and exchange it for a new access token.
     refreshFn: (_, callback) => {
@@ -158,6 +163,7 @@ export async function getConnection(): Promise<SFConnection> {
       connection = new Connection({
         instanceUrl: passthroughInstance,
         accessToken: passthroughToken,
+        version: JSFORCE_API_VERSION,
       });
       connectionEstablishedAt = now;
     }
