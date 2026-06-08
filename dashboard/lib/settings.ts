@@ -4,19 +4,27 @@ import path from "path";
 const SETTINGS_PATH = path.join(process.cwd(), ".settings.json");
 
 export interface AppSettings {
-  /** Swappable per-customer accent — maps to --color-accent */
   accentColor: string;
-  /** Optional override for --color-ink (for very dark brand colors) */
-  inkColor: string | null;
+  paperColor: string | null;
+  textColor: string | null;      // body text color
+  headerBgColor: string | null;  // header background
+  headerFgColor: string | null;  // header text
+  inkColor: string | null;       // legacy — kept for migration
   appName: string;
   logoBase64: string | null;
+  trustLayerModel: string | null; // SF Models API name for Trust Layer mode
 }
 
 export const SETTINGS_DEFAULTS: AppSettings = {
   accentColor: "#946F1F",
+  paperColor: null,
+  textColor: null,
+  headerBgColor: null,
+  headerFgColor: null,
   inkColor: null,
   appName: "Cumulus Bank",
   logoBase64: null,
+  trustLayerModel: null,
 };
 
 export function getSettings(): AppSettings {

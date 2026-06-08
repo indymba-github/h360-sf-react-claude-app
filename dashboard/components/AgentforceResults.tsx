@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { AgentforceResultGroup, AgentforceResultRecord, AgentforceAggregateSummary } from "@/lib/agentforce-types";
 
 interface Props {
@@ -8,8 +9,18 @@ interface Props {
   instanceUrl?: string;
 }
 
+const ALLOWED_TAGS = new Set(["strong", "em", "b", "i", "u", "h1", "h2", "h3", "p", "ul", "ol", "li", "br"]);
+
 function sanitizeAggregateHtml(html: string): string {
-  return html.replace(/<(?!\/?(?:strong|em|b|i)\b)[^>]+>/gi, "");
+  return html
+    // Strip outer <body> wrapper if present
+    .replace(/^\s*<body[^>]*>([\s\S]*)<\/body>\s*$/i, "$1")
+    // Convert non-standard <red> to an inline highlight span
+    .replace(/<red>([\s\S]*?)<\/red>/gi, '<span style="color:#C84A3F;font-weight:600">$1</span>')
+    // Strip any remaining tags not in the allowlist
+    .replace(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)([^>]*)>/g, (match, slash, tag) =>
+      ALLOWED_TAGS.has(tag.toLowerCase()) ? match : ""
+    );
 }
 
 export default function AgentforceResults({ results, summaries, instanceUrl }: Props) {
@@ -55,12 +66,50 @@ export default function AgentforceResults({ results, summaries, instanceUrl }: P
   );
 }
 
+function useFinancialAccountBalance(recordId: string, objectType?: string) {
+  const [balance, setBalance] = useState<{ amount: number | null; currency: string; asOf: string | null } | null>(null);
+
+  useEffect(() => {
+    // FA IDs use the 0c7 key prefix in FSC Core
+    if (!recordId || !objectType?.toLowerCase().includes("financial")) return;
+    fetch(`/api/financial-accounts/${recordId}/balance`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data?.balance) {
+          setBalance({
+            amount: data.balance.Amount,
+            currency: data.balance.CurrencyIsoCode ?? "USD",
+            asOf: data.balance.BalanceAsOfDate,
+          });
+        }
+      })
+      .catch(() => null);
+  }, [recordId, objectType]);
+
+  return balance;
+}
+
+function formatBalanceCurrency(amount: number, currency: string) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
 function RecordCard({ record, instanceUrl }: { record: AgentforceResultRecord; instanceUrl?: string }) {
   const displayableFields = Object.entries(record.fields)
     .filter(([key]) => !["Id", "CreatedDate"].includes(key))
     .slice(0, 4);
 
   const sfLink = instanceUrl ? `${instanceUrl}/lightning/r/${record.id}/view` : null;
+  const balance = useFinancialAccountBalance(record.id, record.objectType);
+
+  const maskedNumber = (() => {
+    const raw = Object.entries(record.fields).find(([k]) => k.toLowerCase().includes("number"))?.[1];
+    if (!raw) return null;
+    return raw.startsWith("XXXX") ? `••• ${raw.slice(-4)}` : raw;
+  })();
 
   return (
     <div style={{
@@ -69,6 +118,7 @@ function RecordCard({ record, instanceUrl }: { record: AgentforceResultRecord; i
       padding: "8px 10px",
       width: "100%",
     }}>
+      {/* Title row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
         <div style={{
           fontFamily: "var(--font-body)",
@@ -100,7 +150,44 @@ function RecordCard({ record, instanceUrl }: { record: AgentforceResultRecord; i
           </a>
         )}
       </div>
-      {displayableFields.length > 0 && (
+
+      {/* Account number + type on same line */}
+      {(maskedNumber || record.subtitle) && (
+        <div style={{
+          display: "flex",
+          gap: "8px",
+          alignItems: "center",
+          marginTop: "3px",
+          fontFamily: "var(--font-mono)",
+          fontSize: "11px",
+          color: "var(--color-ink-soft)",
+        }}>
+          {maskedNumber && <span>{maskedNumber}</span>}
+          {maskedNumber && record.subtitle && (
+            <span style={{ color: "var(--color-border)", fontSize: "10px" }}>·</span>
+          )}
+          {record.subtitle && (
+            <span style={{ fontFamily: "var(--font-body)" }}>{record.subtitle}</span>
+          )}
+        </div>
+      )}
+
+      {/* Balance */}
+      {balance !== null && balance.amount !== null && (
+        <div style={{
+          marginTop: "6px",
+          fontFamily: "var(--font-display)",
+          fontSize: "16px",
+          fontWeight: 600,
+          color: "var(--color-ink)",
+          fontVariantNumeric: "tabular-nums",
+        }}>
+          {formatBalanceCurrency(balance.amount, balance.currency)}
+        </div>
+      )}
+
+      {/* Remaining fields — exclude number since it's shown above */}
+      {displayableFields.filter(([k]) => !k.toLowerCase().includes("number")).length > 0 && (
         <div style={{
           display: "grid",
           gridTemplateColumns: "auto 1fr",
@@ -109,25 +196,27 @@ function RecordCard({ record, instanceUrl }: { record: AgentforceResultRecord; i
           fontFamily: "var(--font-body)",
           fontSize: "11px",
         }}>
-          {displayableFields.map(([key, value]) => (
-            <div key={key} style={{ display: "contents" }}>
-              <span style={{ color: "var(--color-ink-soft)", textAlign: "right", paddingTop: "1px" }}>
-                {humanizeFieldName(key)}
-              </span>
-              <span
-                style={{
-                  color: "var(--color-ink)",
-                  overflow: "hidden",
-                  display: "-webkit-box",
-                  WebkitLineClamp: 3,
-                  WebkitBoxOrient: "vertical",
-                }}
-                title={value}
-              >
-                {value}
-              </span>
-            </div>
-          ))}
+          {displayableFields
+            .filter(([k]) => !k.toLowerCase().includes("number"))
+            .map(([key, value]) => (
+              <div key={key} style={{ display: "contents" }}>
+                <span style={{ color: "var(--color-ink-soft)", textAlign: "right", paddingTop: "1px" }}>
+                  {humanizeFieldName(key)}
+                </span>
+                <span
+                  style={{
+                    color: "var(--color-ink)",
+                    overflow: "hidden",
+                    display: "-webkit-box",
+                    WebkitLineClamp: 3,
+                    WebkitBoxOrient: "vertical",
+                  }}
+                  title={value}
+                >
+                  {value}
+                </span>
+              </div>
+            ))}
         </div>
       )}
     </div>
