@@ -13,11 +13,11 @@ export async function POST(request: NextRequest) {
   }
 
   const hexRe = /^#[0-9a-fA-F]{6}$/;
-  if (body.accentColor && !hexRe.test(body.accentColor)) {
-    return NextResponse.json({ error: "Invalid accentColor — must be a 6-digit hex (e.g. #946F1F)" }, { status: 400 });
-  }
-  if (body.inkColor && !hexRe.test(body.inkColor)) {
-    return NextResponse.json({ error: "Invalid inkColor — must be a 6-digit hex" }, { status: 400 });
+  for (const field of ["accentColor", "paperColor", "textColor", "headerBgColor", "headerFgColor", "inkColor"] as const) {
+    const val = body[field];
+    if (val && !hexRe.test(val)) {
+      return NextResponse.json({ error: `Invalid ${field} — must be a 6-digit hex (e.g. #946F1F)` }, { status: 400 });
+    }
   }
   if (body.appName && body.appName.length > 30) {
     return NextResponse.json({ error: "appName must be 30 characters or fewer" }, { status: 400 });

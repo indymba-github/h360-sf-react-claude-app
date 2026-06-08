@@ -89,6 +89,7 @@ async function closeSession(token: string, sessionId: string): Promise<void> {
 
 type ChipType = "executive_brief" | "financial_summary" | "activity_summary" | "cross_sell_ideas";
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const CHIP_LOADING_VERB: Record<ChipType, string> = {
   executive_brief:   "Drafting your executive brief",
   financial_summary: "Summarizing financials",

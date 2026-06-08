@@ -17,6 +17,8 @@ import {
 } from "@/lib/prompts";
 import { useAiContext } from "@/lib/use-ai-context";
 import MicButton from "@/components/MicButton";
+import type { RenderDirective } from "@/lib/render-directives";
+import { findModelByApiName } from "@/lib/salesforce-models-catalog";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -50,12 +52,16 @@ interface Message {
   choiceResolved?: boolean;
   results?: AgentforceResultGroup[];
   summaries?: AgentforceAggregateSummary[];
+  consultedAgentforce?: boolean;
+  trustLayerMode?: boolean;
+  modelUsed?: string;
+  contextPrefetched?: boolean;
 }
 
 // SSE event shapes coming from the server
 interface SseToken         { type: "token";         text: string }
 interface SseStatus        { type: "status";        text: string }
-interface SseDone          { type: "done";           toolCalls: ToolCall[] }
+interface SseDone          { type: "done";           toolCalls: ToolCall[]; render?: RenderDirective | null; consultedAgentforce?: boolean }
 interface SseError         { type: "error";          error: string }
 interface SseWriteComplete { type: "write_complete"; toolName: string; success: boolean; url: string | null }
 interface SseToolStart     { type: "tool_start";    toolId: string; toolName: string }
@@ -104,7 +110,7 @@ function getPromptsForPathDefaults(pathname: string, accountName?: string): Sugg
   return DASHBOARD_PROMPTS;
 }
 
-function getPromptsFromStorage(pathname: string, accountName?: string): SuggestedPrompt[] | null {
+function getPromptsFromStorage(pathname: string): SuggestedPrompt[] | null {
   try {
     const raw = localStorage.getItem("prompts.library");
     if (!raw) return null;
@@ -123,6 +129,7 @@ function getPromptsFromStorage(pathname: string, accountName?: string): Suggeste
 
 // ── Tool icon ──────────────────────────────────────────────────────────────
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function ToolIcon({ name }: { name: string }) {
   if (name.includes("search") || name.includes("soql")) {
     return (
@@ -228,6 +235,9 @@ function AssistantMarkdown({ content }: { content: string }) {
         td: ({ children }) => (
           <td className="px-2 py-1" style={{ border: "0.5px solid var(--color-border)" }}>{children}</td>
         ),
+        a: ({ href, children }) => (
+          <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+        ),
       }}
     >
       {content}
@@ -236,44 +246,6 @@ function AssistantMarkdown({ content }: { content: string }) {
 }
 
 // ── Tool call badges ───────────────────────────────────────────────────────
-
-function ToolCallsUsed({ toolCalls }: { toolCalls: ToolCall[] }) {
-  const [expanded, setExpanded] = useState(false);
-  const visible = expanded ? toolCalls : toolCalls.slice(0, 3);
-  const hasMore = toolCalls.length > 3;
-
-  return (
-    <div className="flex flex-wrap items-center gap-1 mb-1.5 max-w-[90%]">
-      {visible.map((tc, j) => (
-        <span
-          key={j}
-          className="inline-flex items-center gap-1 text-xs"
-          style={{
-            color: "var(--color-ink-soft)",
-            background: "var(--color-surface)",
-            border: "0.5px solid var(--color-border)",
-            padding: "1px 6px",
-            fontSize: "9px",
-            fontFamily: "var(--font-body)",
-            letterSpacing: "0.08em",
-          }}
-        >
-          <span style={{ color: "var(--color-accent)" }}><ToolIcon name={tc.name} /></span>
-          {tc.label}
-        </span>
-      ))}
-      {hasMore && !expanded && (
-        <button
-          onClick={() => setExpanded(true)}
-          className="text-xs px-1"
-          style={{ color: "var(--color-ink-soft)", fontSize: "9px" }}
-        >
-          +{toolCalls.length - 3} more
-        </button>
-      )}
-    </div>
-  );
-}
 
 // ── Tool phase indicator ───────────────────────────────────────────────────
 
@@ -303,6 +275,7 @@ const QUERYING_LABELS: Record<string, string> = {
   sf_log_activity:          "Logging activity…",
   sf_update_record:         "Updating record…",
   sf_create_record:         "Creating record…",
+  ask_agentforce:           "Asking Agentforce…",
 };
 
 function completeLabel(toolName: string, count: number | null): string {
@@ -802,10 +775,12 @@ export default function ChatPanel({
   accountContext: accountContextProp,
   initialMcpMode = "local",
   hasMcpToken = false,
+  onRender,
 }: {
   accountContext?: AccountContext;
   initialMcpMode?: McpMode;
   hasMcpToken?: boolean;
+  onRender?: (directive: RenderDirective | null) => void;
 }) {
   const pathname = usePathname();
 
@@ -833,6 +808,8 @@ export default function ChatPanel({
   const [activeAgentProfile, setActiveAgentProfile] = useState<AgentProfile | null>(null);
   const [agentProfiles, setAgentProfiles]           = useState<AgentProfile[]>([]);
   const [agentPickerOpen, setAgentPickerOpen]       = useState(false);
+  const [consultAgentforce, setConsultAgentforce]   = useState(false);
+  const [trustLayerMode, setTrustLayerMode]         = useState(false);
   const [showMcpPrompt, setShowMcpPrompt] = useState(false);
   const [panelWidthPct, setPanelWidthPct] = useState(DEFAULT_WIDTH_PCT);
   const [collapsed, setCollapsed]         = useState(false);
@@ -845,6 +822,7 @@ export default function ChatPanel({
   const prevPathnameRef    = useRef<string | null>(null);
   const accountContextRef  = useRef(accountContextProp);
   const messagesRef        = useRef<Message[]>([]);
+  const conversationIdRef  = useRef(`chat-${Date.now()}`);
 
   const { pendingPrompt, clearPendingPrompt } = useAiContext();
 
@@ -853,7 +831,7 @@ export default function ChatPanel({
 
   // Load prompts from localStorage after hydration to avoid server/client mismatch
   useEffect(() => {
-    const fromStorage = getPromptsFromStorage(pathname, accountContextProp?.accountName);
+    const fromStorage = getPromptsFromStorage(pathname);
     if (fromStorage) setSuggestedPrompts(fromStorage);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -888,6 +866,7 @@ export default function ChatPanel({
       setMessages([]);
       setSessionExpired(false);
       setShowMcpPrompt(false);
+      conversationIdRef.current = `chat-${Date.now()}`;
       try { sessionStorage.removeItem(SS_MESSAGES_KEY); } catch {}
     }
   }, [pathname]);
@@ -903,6 +882,21 @@ export default function ChatPanel({
   // send is stable (useCallback with stable deps) — including it would require memoizing with all its deps
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingPrompt, clearPendingPrompt]);
+
+  // Listen for 'Ask AI about this' events dispatched by rendered components
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const evt = e as CustomEvent<{ question: string; accountId?: string }>;
+      const question = evt.detail?.question;
+      if (!question) return;
+      setCollapsed(false);
+      setPanelWidthPct((prev) => (prev < MIN_WIDTH_PCT + 0.01 ? DEFAULT_WIDTH_PCT : prev));
+      setTimeout(() => send(question), 50);
+    };
+    window.addEventListener("chat:ask", handler);
+    return () => window.removeEventListener("chat:ask", handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Load persisted state on mount (client-only)
   useEffect(() => {
@@ -979,6 +973,20 @@ export default function ChatPanel({
       try { localStorage.setItem(LS_WIDTH_KEY, String(panelWidthPct)); } catch {}
     }
   }, [panelWidthPct, collapsed]);
+
+  // Publish live panel width so overlays (RenderSlot) can avoid covering it
+  useEffect(() => {
+    const widthValue = collapsed
+      ? `${COLLAPSED_WIDTH}px`
+      : `${panelWidthPct * 100}vw`;
+    document.documentElement.style.setProperty('--ai-panel-width', widthValue);
+  }, [panelWidthPct, collapsed]);
+
+  useEffect(() => {
+    return () => {
+      document.documentElement.style.removeProperty('--ai-panel-width');
+    };
+  }, []);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     if (collapsed) return;
@@ -1078,8 +1086,9 @@ export default function ChatPanel({
           agentId: activeAgentProfile?.agentId,
         }),
       });
-      const data = await res.json() as { reply?: string; type?: string; choices?: AgentforceRecordChoice[]; results?: AgentforceResultGroup[]; summaries?: AgentforceAggregateSummary[]; error?: string };
+      const data = await res.json() as { reply?: string; type?: string; choices?: AgentforceRecordChoice[]; results?: AgentforceResultGroup[]; summaries?: AgentforceAggregateSummary[]; render?: RenderDirective | null; error?: string };
       if (!res.ok || data.error) throw new Error(data.error ?? "Agentforce request failed");
+      if (data.render && onRender) onRender(data.render);
       setMessages((prev) => [...prev, {
         role: "assistant",
         content: data.reply ?? "",
@@ -1098,7 +1107,7 @@ export default function ChatPanel({
       setStatus(null);
       setLoading(false);
     }
-  }, [activeAgentProfile]);
+  }, [activeAgentProfile, onRender]);
 
   const handleChoiceSelected = useCallback(async (parentMessage: Message, choice: AgentforceRecordChoice) => {
     setMessages((prev) => prev.map((m) => m === parentMessage ? { ...m, choiceResolved: true } : m));
@@ -1117,8 +1126,9 @@ export default function ChatPanel({
           agentId: activeAgentProfile?.agentId,
         }),
       });
-      const data = await res.json() as { reply?: string; type?: string; choices?: AgentforceRecordChoice[]; results?: AgentforceResultGroup[]; summaries?: AgentforceAggregateSummary[]; error?: string };
+      const data = await res.json() as { reply?: string; type?: string; choices?: AgentforceRecordChoice[]; results?: AgentforceResultGroup[]; summaries?: AgentforceAggregateSummary[]; render?: RenderDirective | null; error?: string };
       if (!res.ok || data.error) throw new Error(data.error ?? "Agentforce request failed");
+      if (data.render && onRender) onRender(data.render);
       setMessages((prev) => [...prev, {
         role: "assistant",
         content: data.reply ?? "",
@@ -1137,7 +1147,7 @@ export default function ChatPanel({
       setStatus(null);
       setLoading(false);
     }
-  }, [activeAgentProfile]);
+  }, [activeAgentProfile, onRender]);
 
   const handleAgentSwitch = useCallback(async (profile: AgentProfile) => {
     if (profile.id === activeAgentProfile?.id) {
@@ -1177,11 +1187,50 @@ export default function ChatPanel({
 
       const outgoingMessages = [...messagesRef.current, userMsg];
 
+      // Trust Layer mode: non-streaming JSON response
+      if (trustLayerMode) {
+        try {
+          const res = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: outgoingMessages, accountContext: accountContextRef.current, trustLayerMode: true }),
+          });
+          const data = await res.json() as { text?: string; modelUsed?: string; error?: string; contextPrefetched?: boolean };
+          console.log('[ChatPanel] === RECEIVED RESPONSE ===');
+          console.log('Full data:', JSON.stringify(data, null, 2));
+          console.log('Text field:', data.text);
+          console.log('trustLayerMode:', true);
+          console.log('[ChatPanel] === END RECEIVED ===');
+          if (!res.ok || data.error) {
+            if (res.status === 401 || data.error === "SF_SESSION_EXPIRED") {
+              setSessionExpired(true);
+            } else {
+              setMessages((prev) => [...prev, { role: "assistant", content: `**Error:** ${data.error ?? "Trust Layer request failed"}` }]);
+            }
+          } else {
+            setMessages((prev) => [...prev, {
+              role: "assistant",
+              content: data.text ?? "",
+              trustLayerMode: true,
+              modelUsed: data.modelUsed,
+              contextPrefetched: data.contextPrefetched,
+            }]);
+          }
+        } catch (err) {
+          setMessages((prev) => [...prev, { role: "assistant", content: `**Error:** ${err instanceof Error ? err.message : "Something went wrong."}` }]);
+        } finally {
+          setLoading(false);
+          setStreaming("");
+          setStatus(null);
+        }
+        return;
+      }
+
       const doFetch = async (retried = false): Promise<Response> => {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: outgoingMessages, accountContext: accountContextRef.current }),
+          body: JSON.stringify({ messages: outgoingMessages, accountContext: accountContextRef.current, consultAgentforce, conversationId: conversationIdRef.current }),
         });
         if (res.status === 401 && !retried) {
           const refreshRes = await fetch("/api/auth/refresh", { method: "POST" });
@@ -1271,8 +1320,13 @@ export default function ChatPanel({
                 writeResult,
                 isProposal: isProposal || undefined,
                 followUps: followUps.length > 0 ? followUps : undefined,
+                consultedAgentforce: event.consultedAgentforce || undefined,
               },
             ]);
+            // Forward render directive to parent (account detail page)
+            if (event.render && onRender) {
+              onRender(event.render);
+            }
             indicatorMap.clear();
             pendingWriteRef.current = null;
             setActiveIndicators([]);
@@ -1302,7 +1356,7 @@ export default function ChatPanel({
         setLoading(false);
       }
     },
-    [loading, mcpMode, sendAgentforce]
+    [loading, mcpMode, trustLayerMode, sendAgentforce, onRender]
   );
 
   const handleRecordingChange = useCallback((recording: boolean) => {
@@ -1450,6 +1504,7 @@ export default function ChatPanel({
                     setMessages([]);
                     setSessionExpired(false);
                     setShowMcpPrompt(false);
+                    conversationIdRef.current = `chat-${Date.now()}`;
                     try { sessionStorage.removeItem(SS_MESSAGES_KEY); } catch {}
                   }}
                   title="Clear conversation"
@@ -1503,6 +1558,66 @@ export default function ChatPanel({
                 onClosePicker={() => setAgentPickerOpen(false)}
                 onSwitch={handleAgentSwitch}
               />
+            )}
+
+            {/* Row 2c: Consult Agentforce + Trust Layer toggles (Local and Hosted only) */}
+            {mcpMode !== "agentforce" && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                <button
+                  type="button"
+                  onClick={() => setConsultAgentforce((v) => !v)}
+                  aria-pressed={consultAgentforce}
+                  title="When on, Claude can consult Agentforce for specialized knowledge"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "3px 10px",
+                    border: consultAgentforce
+                      ? "1px solid rgba(30, 64, 175, 0.30)"
+                      : "1px solid var(--color-border)",
+                    borderRadius: "14px",
+                    background: consultAgentforce
+                      ? "rgba(30, 64, 175, 0.10)"
+                      : "transparent",
+                    fontFamily: "var(--font-body)",
+                    fontSize: "11px",
+                    color: consultAgentforce ? "#1E40AF" : "var(--color-ink-soft)",
+                    cursor: "pointer",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  <span style={{ color: consultAgentforce ? "#1E40AF" : "var(--color-ink-muted)", fontSize: "11px" }}>✦</span>
+                  <span>{consultAgentforce ? "Agentforce active" : "Consult Agentforce"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTrustLayerMode((v) => !v)}
+                  aria-pressed={trustLayerMode}
+                  title="Route chat through Salesforce Einstein Trust Layer (PII masking, audit logging)"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "3px 10px",
+                    border: trustLayerMode
+                      ? "1px solid rgba(45, 106, 79, 0.35)"
+                      : "1px solid var(--color-border)",
+                    borderRadius: "14px",
+                    background: trustLayerMode
+                      ? "rgba(45, 106, 79, 0.10)"
+                      : "transparent",
+                    fontFamily: "var(--font-body)",
+                    fontSize: "11px",
+                    color: trustLayerMode ? "#2D6A4F" : "var(--color-ink-soft)",
+                    cursor: "pointer",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  <span style={{ fontSize: "11px" }}>🛡️</span>
+                  <span>{trustLayerMode ? "Trust Layer on" : "Trust Layer"}</span>
+                </button>
+              </div>
             )}
 
             {/* Row 3: context pill */}
@@ -1651,6 +1766,46 @@ export default function ChatPanel({
                       )}
                       <AssistantMarkdown content={m.content} />
                       {m.writeResult && <WriteResultBanner result={m.writeResult} />}
+                      {m.consultedAgentforce && (
+                        <div
+                          style={{
+                            marginTop: "6px",
+                            paddingTop: "6px",
+                            borderTop: "0.5px solid var(--color-border)",
+                            fontFamily: "var(--font-body)",
+                            fontSize: "10px",
+                            fontStyle: "italic",
+                            color: "var(--color-ink-soft)",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "4px",
+                          }}
+                        >
+                          <span style={{ color: "#1E40AF", fontSize: "10px" }}>✦</span>
+                          Consulted Agentforce via the Einstein Trust Layer
+                        </div>
+                      )}
+                      {m.trustLayerMode && (
+                        <div
+                          style={{
+                            marginTop: "6px",
+                            paddingTop: "6px",
+                            borderTop: "0.5px solid var(--color-border)",
+                            fontFamily: "var(--font-body)",
+                            fontSize: "10px",
+                            fontStyle: "italic",
+                            color: "var(--color-ink-soft)",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "4px",
+                          }}
+                        >
+                          <span style={{ fontSize: "10px" }}>🛡️</span>
+                          {findModelByApiName(m.modelUsed ?? "")?.label ?? "Salesforce Models API"}
+                          {m.contextPrefetched && " · Account context loaded"}
+                          {" via the Einstein Trust Layer"}
+                        </div>
+                      )}
                     </>
                   ) : (
                     <p className="leading-relaxed whitespace-pre-wrap">{m.content}</p>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { parseAgentforceResponse, type AgentforceNormalizedResponse } from "@/lib/agentforce-types";
+import { extractRenderFromAgentforceMessage } from "@/lib/agentforce-render";
 
 const SF_LOGIN_URL        = (process.env.SF_LOGIN_URL ?? "").replace(/\/$/, "");
 const AGENT_CLIENT_ID     = process.env.SF_AGENT_CLIENT_ID ?? "";
@@ -62,22 +63,31 @@ async function getClientCredentialsToken(): Promise<string> {
 // ── Agent session helpers ─────────────────────────────────────────────────────
 
 async function startSession(accessToken: string, agentId: string): Promise<string> {
-  const res = await fetch(
-    `${AGENT_BASE_URL}/einstein/ai-agent/v1/agents/${agentId}/sessions`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        externalSessionKey: crypto.randomUUID(),
-        instanceConfig: { endpoint: SF_LOGIN_URL },
-        streamingCapabilities: { chunkTypes: ["Text"] },
-        bypassUser: false,
-      }),
-    }
-  );
+  const attempt = async (bypassUser: boolean) =>
+    fetch(
+      `${AGENT_BASE_URL}/einstein/ai-agent/v1/agents/${agentId}/sessions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          externalSessionKey: crypto.randomUUID(),
+          instanceConfig: { endpoint: SF_LOGIN_URL },
+          streamingCapabilities: { chunkTypes: ["Text"] },
+          bypassUser,
+        }),
+      }
+    );
+
+  let res = await attempt(false);
+
+  // Retry with bypassUser: true when the org has no "Run As" user on the Connected App
+  // (400 "Invalid user ID") or when the agent config requires it (412 "Invalid Config").
+  if (res.status === 412 || res.status === 400) {
+    res = await attempt(true);
+  }
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -230,18 +240,20 @@ export async function POST(request: NextRequest) {
       const response = await sendMessage(accessToken, session.agentSessionId, sequenceId, messageText);
       session.agentSequenceId = sequenceId;
       await session.save();
+      const { directive, cleanedMessage } = extractRenderFromAgentforceMessage(response.text);
       return NextResponse.json({
-        reply: response.text,
+        reply: cleanedMessage,
         type: response.type,
         choices: response.choices,
         results: response.results,
         summaries: response.summaries,
+        render: directive,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
 
-      // Session not found — start a fresh session and retry once
-      if ((msg.includes("404") || msg.includes("SESSION_NOT_FOUND")) && !freshToken) {
+      // Session not found or stale (404, 412) — start a fresh session and retry once
+      if ((msg.includes("404") || msg.includes("412") || msg.includes("SESSION_NOT_FOUND")) && !freshToken) {
         session.agentSessionId  = undefined;
         session.agentSequenceId = undefined;
         return attempt(true);

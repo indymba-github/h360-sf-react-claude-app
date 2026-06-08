@@ -38,7 +38,8 @@ function fmtFull(v: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
 }
 
-function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: any[]; label?: string }) {
+type PipelinePayloadEntry = { value: number; payload: { fill: string; count: number } }
+function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: PipelinePayloadEntry[]; label?: string }) {
   if (!active || !payload?.length) return null;
   const { value, payload: inner } = payload[0];
   return (

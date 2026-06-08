@@ -59,8 +59,8 @@ export default function HeaderBar({ appName: serverAppName, logoSrc: serverLogoS
     <header
       className="flex items-center gap-6 shrink-0 w-full"
       style={{
-        background: "var(--color-ink-deep)",
-        color: "var(--color-paper-bright)",
+        background: "var(--color-header-bg)",
+        color: "var(--color-header-fg)",
         padding: "18px 24px",
       }}
     >
@@ -68,7 +68,7 @@ export default function HeaderBar({ appName: serverAppName, logoSrc: serverLogoS
       <div className="flex items-center shrink-0" style={{ gap: "10px" }}>
         <div
           className="flex items-center justify-center overflow-hidden shrink-0"
-          style={{ width: 30, height: 30, borderRadius: 3, background: "color-mix(in srgb, var(--color-paper-bright) 12%, transparent)" }}
+          style={{ width: 30, height: 30, borderRadius: 3, background: "color-mix(in srgb, var(--color-header-fg) 12%, transparent)" }}
         >
           <img
             src={logoSrc ?? "/cumulus-logo.svg"}
@@ -82,7 +82,7 @@ export default function HeaderBar({ appName: serverAppName, logoSrc: serverLogoS
             fontSize: "18px",
             fontWeight: 500,
             letterSpacing: "-0.01em",
-            color: "var(--color-paper-bright)",
+            color: "var(--color-header-fg)",
           }}
         >
           {appName}
@@ -101,8 +101,8 @@ export default function HeaderBar({ appName: serverAppName, logoSrc: serverLogoS
               style={{
                 fontSize: "13px",
                 color: active
-                  ? "var(--color-paper-bright)"
-                  : "color-mix(in srgb, var(--color-paper-bright) 50%, transparent)",
+                  ? "var(--color-header-fg)"
+                  : "color-mix(in srgb, var(--color-header-fg) 50%, transparent)",
                 letterSpacing: "0.04em",
               }}
             >
@@ -123,7 +123,7 @@ export default function HeaderBar({ appName: serverAppName, logoSrc: serverLogoS
 
       {/* User identity */}
       <div className="flex items-center gap-3 shrink-0">
-        <p style={{ fontSize: "13px", fontWeight: 500, color: "var(--color-paper-bright)" }}>
+        <p style={{ fontSize: "13px", fontWeight: 500, color: "var(--color-header-fg)" }}>
           {userName ?? "User"}
         </p>
         <div

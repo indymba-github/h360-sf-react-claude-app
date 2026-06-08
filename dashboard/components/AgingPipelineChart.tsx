@@ -61,7 +61,8 @@ function useStallColors(): (ratio: number) => string {
   };
 }
 
-function CustomTooltip({ active, payload, instanceUrl }: { active?: boolean; payload?: any[]; instanceUrl?: string }) {
+type TooltipPayloadEntry = { payload: AgingOpportunity };
+function CustomTooltip({ active, payload, instanceUrl }: { active?: boolean; payload?: TooltipPayloadEntry[]; instanceUrl?: string }) {
   if (!active || !payload?.length) return null;
   const d: AgingOpportunity = payload[0].payload;
   return (
@@ -102,9 +103,10 @@ export default function AgingPipelineChart({ opportunities, instanceUrl }: { opp
         data={data}
         layout="vertical"
         margin={{ top: 4, right: 16, left: 4, bottom: 4 }}
-        onClick={(e: any) => {
-          if (e?.activePayload?.[0]) {
-            const opp = e.activePayload[0].payload as AgingOpportunity;
+        onClick={(e) => {
+          const payload = (e as unknown as { activePayload?: TooltipPayloadEntry[] })?.activePayload;
+          if (payload?.[0]) {
+            const opp = payload[0].payload;
             if (opp.accountId) router.push(`/accounts/${opp.accountId}`);
           }
         }}

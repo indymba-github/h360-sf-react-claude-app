@@ -8,7 +8,6 @@ import ChatPanel from "@/components/ChatPanel";
 import PageHeading from "@/components/PageHeading";
 import SectionHeader from "@/components/SectionHeader";
 import dynamic from "next/dynamic";
-import type { SFTask, SFPipelineStage } from "@/lib/salesforce";
 import type { AgendaItem } from "@/components/TodaysAgenda";
 import type { AgingOpportunity } from "@/components/AgingPipelineChart";
 import type { ForecastBucket } from "@/components/ForecastChart";
@@ -269,7 +268,7 @@ export default async function DashboardPage() {
   if (parts.length > 0) subtitle = parts.join(". ") + ".";
 
   const signalMeta = `${cases.length} alert${cases.length !== 1 ? "s" : ""} · ${recent.length} update${recent.length !== 1 ? "s" : ""}`;
-  const forecastBuckets = buildForecastBuckets(agingOppRows as any);
+  const forecastBuckets = buildForecastBuckets(agingOppRows);
   const agingOpps = buildAgingOpps(agingOppRows);
   const agendaItems = buildAgendaItems(tasks, events);
 

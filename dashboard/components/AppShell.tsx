@@ -4,24 +4,26 @@ import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import HeaderBar from "./HeaderBar";
 import { AiContextProvider } from "@/lib/use-ai-context";
-import { applyAccentTokens } from "@/lib/brandColors";
+import { applyBrandTokens } from "@/lib/brandColors";
+import { migratePalette } from "@/lib/demoPacks";
 
 function applyStoredSettings() {
   try {
     const s = JSON.parse(localStorage.getItem("settings") ?? "{}") as Record<string, string>;
-    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+
     if (s.accentColor) {
-      const palette = (!isDark && s.inkColor && s.paperColor)
-        ? { ink: s.inkColor, paper: s.paperColor }
-        : undefined;
-      applyAccentTokens(s.accentColor, palette);
+      const legacyInk = s.inkColor ?? "#1B1F2A";
+      // applyBrandTokens is theme-aware — it reads data-theme and handles
+      // surface vars correctly for both light and dark mode
+      applyBrandTokens(s.accentColor, migratePalette({
+        accent:   s.accentColor,
+        paper:    s.paperColor    ?? "#F4F1EA",
+        text:     s.textColor     ?? legacyInk,
+        headerBg: s.headerBgColor ?? legacyInk,
+        headerFg: s.headerFgColor ?? (s.paperColor ?? "#F4F1EA"),
+      }));
     }
-    // In dark mode, remove any light-mode overrides so dark-mode CSS tokens win
-    if (isDark) {
-      document.documentElement.style.removeProperty("--color-ink");
-      document.documentElement.style.removeProperty("--color-ink-deep");
-      document.documentElement.style.removeProperty("--color-paper");
-    }
+
     if (s.displayFont) {
       loadFont(s.displayFont);
       document.documentElement.style.setProperty("--font-display", s.displayFont === "system-ui" ? "system-ui, sans-serif" : `'${s.displayFont}', serif`);

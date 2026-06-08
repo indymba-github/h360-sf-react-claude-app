@@ -135,9 +135,10 @@ export async function POST(req: NextRequest) {
       results: response.results,
       summaries: response.summaries,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("[prompts/execute]", err);
-    return NextResponse.json({ error: err.message ?? "Prompt execution failed" }, { status: 502 });
+    const message = err instanceof Error ? err.message : "Prompt execution failed";
+    return NextResponse.json({ error: message }, { status: 502 });
   } finally {
     if (sessionId) {
       const token = await getToken().catch(() => null);

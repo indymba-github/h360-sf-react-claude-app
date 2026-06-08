@@ -8,6 +8,14 @@ import { getSession } from "@/lib/session";
 import { getEffectiveMcpMode, localMcpServerPath, hostedMcpServerUrl } from "@/lib/mcp-config";
 import type { McpMode } from "@/lib/mcp-config";
 import { refreshSession, refreshMcpSession, PROACTIVE_REFRESH_THRESHOLD_MS } from "@/lib/token-refresh";
+import { hasRenderDirective, type RenderDirective } from "@/lib/render-directives";
+import { RENDER_TOOLS, RENDER_TOOL_NAMES, handleRenderTool } from "@/lib/render-tools";
+import { PIPELINE_HEURISTICS, heuristicsToPromptText } from "@/lib/risk-heuristics";
+import { ASK_AGENTFORCE_TOOL, handleAskAgentforce } from "@/lib/agentforce-tool";
+import { sfModelsChat } from "@/lib/salesforce";
+import { getSettings } from "@/lib/settings";
+import { SF_MODELS_DEFAULT_API_NAME } from "@/lib/salesforce-models-catalog";
+import { prefetchAccountContext, formatPrefetchedContext, type PrefetchedAccountContext } from "@/lib/trust-layer-context";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -195,7 +203,7 @@ const BASE_SYSTEM_PROMPT =
   "1. ALWAYS describe exactly what you plan to create or change BEFORE calling any write tool.\n" +
   "2. ALWAYS wait for explicit user confirmation ('yes', 'go ahead', 'do it', 'confirm') before executing the write.\n" +
   "3. NEVER batch multiple writes without confirming each one individually.\n" +
-  "4. After a successful write, provide the Salesforce link to the created or updated record.\n" +
+  "4. After a successful write, link to the created or updated record (see LINKING TO RECORDS below).\n" +
   "5. If the user says 'no' or 'cancel', acknowledge and do not call the tool.\n\n" +
   "You can suggest write actions proactively when analysis reveals action items — for example, " +
   "after reviewing an account you might say 'I notice there are no follow-up tasks scheduled. " +
@@ -209,7 +217,45 @@ const BASE_SYSTEM_PROMPT =
   "```\n" +
   "The questions should be concise (under 8 words each), specific to the current context, and " +
   "phrased as natural follow-ons to what you just said. Do not add this block if the response is " +
-  "a write proposal (asking for confirmation before a write operation).";
+  "a write proposal (asking for confirmation before a write operation).\n\n" +
+  "MORTGAGE CALCULATOR:\n" +
+  "You have a render tool called render_mortgage_calculator that " +
+  "opens an interactive mortgage payment calculator as an overlay " +
+  "on the user's screen. Use it when:\n" +
+  "- The user asks to calculate, estimate, or compute a mortgage payment\n" +
+  "- The user asks 'what would X cost monthly?' or similar hypothetical mortgage questions\n" +
+  "- The user mentions specific mortgage parameters and you can extract values\n" +
+  "- The user wants to explore mortgage scenarios\n\n" +
+  "VALUE EXTRACTION:\n" +
+  "- '$500K home' → homePrice: 500000\n" +
+  "- '20% down' → downPaymentPercent: 20\n" +
+  "'$100,000 down' → downPaymentAmount: 100000\n" +
+  "- '7.5% rate' → interestRate: 7.5\n" +
+  "- '30-year mortgage' → loanTermYears: 30\n" +
+  "- '$500/month HOA' → monthlyHOA: 500\n\n" +
+  "For any value the user does NOT specify, omit it from the tool call. " +
+  "DO NOT ASK the user for missing values before calling the tool — just call it with what you have. " +
+  "After the calculator renders, you may comment briefly on the scenario but don't need to recompute.\n\n" +
+  "CREATING OPPORTUNITIES FROM THE CALCULATOR:\n" +
+  "You have a tool called create_mortgage_opportunity that creates a real Salesforce Opportunity " +
+  "from a mortgage scenario. This is a WRITE operation that permanently creates a record.\n\n" +
+  "MANDATORY CONFIRMATION FLOW:\n" +
+  "When the user asks to create an opportunity from a mortgage scenario " +
+  "(often triggered by a 'Create Opportunity' button that sends you the scenario details):\n" +
+  "1. DO NOT call create_mortgage_opportunity immediately.\n" +
+  "2. FIRST, describe the opportunity you propose to create:\n" +
+  "   - The auto-generated name (Mortgage — [Account] — [date])\n" +
+  "   - The Amount (the loan principal)\n" +
+  "   - Stage (Prospecting) and Close Date (30 days out)\n" +
+  "   - A note that the full scenario goes in the description\n" +
+  "3. ASK the user to confirm (e.g., 'Shall I create this opportunity?').\n" +
+  "4. ONLY after the user confirms ('yes', 'go ahead', 'create it', etc.) " +
+  "call create_mortgage_opportunity with the scenario values.\n" +
+  "5. After creation, confirm success and share the record details.\n\n" +
+  "If you don't have an accountId, ask the user which account the opportunity should belong to " +
+  "before proposing anything.\n\n" +
+  "This confirmation step is REQUIRED for all write operations. " +
+  "Never create, update, or delete Salesforce records without explicit user confirmation in the conversation.";
 
 const HOSTED_PROMPT_ADDENDUM =
   "\n\nYou have access to pre-built Salesforce prompt templates. " +
@@ -245,17 +291,193 @@ function buildAccountContextBlock(ctx: AccountContext): string {
   );
 }
 
-function buildSystemPrompt(mode: McpMode, resourceContext = "", accountContext?: AccountContext): string {
+function buildAgentforceConsultGuidance(): string {
+  return (
+    "AGENTFORCE CONSULTATION:\n" +
+    "You have access to a tool called \"ask_agentforce\" that lets you consult our bank's Agentforce agent. " +
+    "Agentforce has access to the institution's actual knowledge base, attached documents, policy library, and bank-specific procedural information.\n\n" +
+    "DEFAULT BEHAVIOR: For any question that involves bank-specific policy, internal documents, attached files on accounts, " +
+    "procedural guidance, or institutional knowledge — call ask_agentforce BEFORE attempting to answer from your training. " +
+    "Your training contains generic banking knowledge that may be wrong for this specific institution.\n\n" +
+    "PATTERN TO FOLLOW:\n" +
+    "1. User asks question\n" +
+    "2. Decide: is this universal (math, definitions, general concepts) or institutional (our policy, this document, specific procedures)?\n" +
+    "3. If institutional → call ask_agentforce first, then synthesize its response with any context from the conversation\n" +
+    "4. If universal → answer directly from your knowledge\n\n" +
+    "When in doubt about which category a question falls into, lean toward consulting. " +
+    "The cost of a tool call is low; the cost of a confidently wrong policy answer is high.\n\n" +
+    "EXAMPLES:\n" +
+    "- \"What's our overdraft fee schedule?\" → consult (institutional)\n" +
+    "- \"What's an overdraft fee?\" → answer directly (universal)\n" +
+    "- \"Tell me about the credit memo on Morris Roasters\" → consult (document-specific)\n" +
+    "- \"How is a credit memo typically structured?\" → answer directly (universal)\n" +
+    "- \"What's the escalation path for a dispute?\" → consult (our procedure)\n" +
+    "- \"What is a chargeback dispute?\" → answer directly (universal)\n\n" +
+    "WHEN CONSULTING AGENTFORCE — INCLUDE ANCHORING INFORMATION:\n" +
+    "Agentforce retrieves knowledge and documents based on the identifiers in your message. " +
+    "A vague question may return nothing even when the answer exists. Always include:\n" +
+    "- The Account Name and/or Id when the question is about a specific customer\n" +
+    "- The document type or name when asking about an attached file (e.g., \"credit memo\", \"loan agreement\", \"annual review\")\n" +
+    "- Specific record references (financial account number, case number, opportunity name) when relevant\n\n" +
+    "GOOD: \"What facilities are in the credit memo for Acme Corp (Account 001000000000001AAA)?\"\n" +
+    "BAD: \"What facilities are in the credit memo?\"\n\n" +
+    "When you have an account in scope from the current page, pass the account_id and account_name parameters " +
+    "to the tool so it injects context automatically. You can still include the account in your question text — " +
+    "redundancy here is better than ambiguity."
+  );
+}
+
+function buildDocumentContentRule(): string {
+  return (
+    "════════════════════════════════════════════════════════════\n" +
+    "CRITICAL TOOL SELECTION RULE — READ FIRST\n" +
+    "════════════════════════════════════════════════════════════\n\n" +
+    "When the user asks about the CONTENT of any document, file, PDF, credit memo, " +
+    "agreement, contract, or attachment:\n\n" +
+    "✓ ALWAYS call ask_agentforce\n" +
+    "✗ DO NOT use CRM search/lookup tools to \"find\" the document\n\n" +
+    "CRM tools (sf_search_records, content searches, SOQL queries, etc.) can find that a document " +
+    "EXISTS — they return the filename, ID, link, and metadata. They CANNOT read what's inside. " +
+    "Only ask_agentforce can read document content.\n\n" +
+    "If you find yourself producing \"I found the document but cannot read its content\" or " +
+    "\"the document is at this link\" — STOP. That answer is incomplete. " +
+    "Call ask_agentforce immediately to actually read the content.\n\n" +
+    "DOCUMENT-CONTENT QUESTIONS → must use ask_agentforce:\n" +
+    "- \"What's in the credit memo?\"\n" +
+    "- \"What facilities are listed?\"\n" +
+    "- \"Summarize the attached agreement\"\n" +
+    "- \"What does the document say about [topic]?\"\n" +
+    "- \"What are the terms in the credit memo?\"\n" +
+    "- \"Read [document name] and tell me [anything]\"\n\n" +
+    "DOCUMENT-METADATA QUESTIONS → CRM tools are correct:\n" +
+    "- \"What documents are attached to this account?\" (just listing them)\n" +
+    "- \"When was the credit memo uploaded?\"\n" +
+    "- \"Who uploaded the credit memo?\"\n" +
+    "- \"Show me all PDFs on this account\"\n\n" +
+    "The rule: metadata ABOUT a document → CRM. Content INSIDE a document → Agentforce.\n" +
+    "════════════════════════════════════════════════════════════"
+  );
+}
+
+function buildTrustLayerSystemPrompt(
+  accountContext?: AccountContext,
+  prefetchedContext?: PrefetchedAccountContext,
+): string {
+  const dateStr = new Date().toLocaleDateString("en-US", {
+    weekday: "long", year: "numeric", month: "long", day: "numeric",
+  });
+  const parts: string[] = [];
+
+  parts.push(
+    `You are an AI assistant for a banking relationship manager. ` +
+    `All responses are routed through Salesforce Einstein Trust Layer for ` +
+    `PII masking, content filtering, and audit logging.\n\n` +
+    `Current date: ${dateStr}.`,
+  );
+
+  if (prefetchedContext && accountContext?.accountName) {
+    parts.push(
+      `══════════════════════════════════════════════════\n` +
+      `ACCOUNT CONTEXT FOR THIS CONVERSATION\n` +
+      `══════════════════════════════════════════════════\n\n` +
+      `The user is currently viewing the Salesforce Account "${accountContext.accountName}". ` +
+      `Use the data below as your PRIMARY source when answering questions about this account.\n\n` +
+      formatPrefetchedContext(prefetchedContext),
+    );
+    parts.push(
+      `IMPORTANT BEHAVIOR RULES:\n` +
+      `1. Answer questions about "${accountContext.accountName}" using ONLY the data above. Do not invent or assume.\n` +
+      `2. If the user asks about something not in the data above, say "I don't see that information in the current data — ` +
+      `try switching off Trust Layer mode to query live Salesforce data."\n` +
+      `3. If the user asks about a different account, explain that you only have data for the currently viewed account ` +
+      `and suggest they navigate to that account first.\n` +
+      `4. Be concise and reference the data directly.`,
+    );
+  } else if (accountContext?.accountName) {
+    parts.push(
+      `The user is viewing the Salesforce Account "${accountContext.accountName}". ` +
+      `You do not have access to live data in this mode.`,
+    );
+  } else {
+    parts.push(
+      `In this mode you do NOT have access to tools and cannot query live Salesforce data. ` +
+      `Answer general questions based on conversation history only.`,
+    );
+  }
+
+  return parts.join("\n\n");
+}
+
+function buildSystemPrompt(mode: McpMode, resourceContext = "", accountContext?: AccountContext, instanceUrl?: string, consultAgentforce = false): string {
   const base = mode === "hosted" ? BASE_SYSTEM_PROMPT + HOSTED_PROMPT_ADDENDUM : BASE_SYSTEM_PROMPT;
   const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const weekday = new Date().toLocaleDateString('en-US', { weekday: 'long' });
-  const parts: string[] = [
-    `Today's date is ${dateStr}. The current day of the week is ${weekday}.`,
-  ];
+  const parts: string[] = [];
+  // Document-content rule goes FIRST so it's the highest-priority instruction
+  if (consultAgentforce) parts.push(buildDocumentContentRule());
+  parts.push(`Today's date is ${dateStr}. The current day of the week is ${weekday}.`);
   if (accountContext) parts.push(buildAccountContextBlock(accountContext));
   parts.push(base);
+  if (instanceUrl) {
+    const baseUrl = instanceUrl.replace(/\/$/, "");
+    parts.push(
+      "LINKING TO RECORDS:\n" +
+      `The Salesforce org URL is ${baseUrl}. ` +
+      "When referencing any Salesforce record — whether just created, updated, or mentioned in conversation — " +
+      `always build the full Lightning URL: ${baseUrl}/lightning/r/{ObjectType}/{recordId}/view. ` +
+      "For example: a Contact with Id 003xx would be " +
+      `${baseUrl}/lightning/r/Contact/003xx/view. ` +
+      "NEVER use bare record IDs, relative paths, or placeholder URLs. " +
+      "Always render the link as markdown, e.g. [View in Salesforce](<full url>)."
+    );
+  }
+  parts.push(buildRiskBriefingGuidance());
+  if (consultAgentforce) parts.push(buildAgentforceConsultGuidance());
   if (resourceContext) parts.push(resourceContext);
   return parts.join("\n\n");
+}
+
+function buildRiskBriefingGuidance(): string {
+  const lookback = PIPELINE_HEURISTICS.recentLossVolume.lookbackDays;
+  return (
+    "ACCOUNT RISK BRIEFING:\n\n" +
+    "You have a tool called render_account_risk_briefing that displays a Risk Briefing card " +
+    "overlaid on the user's screen. Use it when the user asks for a risk briefing, risk view, " +
+    "or risk dashboard on an account. Also OFFER a briefing proactively when, during normal " +
+    "conversation, you fetch account data and notice risk signals (no recent activity, multiple " +
+    "closed-lost opportunities, stalled opportunities, single-contact accounts). When offering " +
+    "proactively, ask the user to confirm before producing the briefing. Suggest at most ONCE " +
+    "per conversation and do not suggest if the user has already viewed a briefing.\n\n" +
+    "PROCESS — follow these steps every time:\n\n" +
+    "1. Gather data for the account using available tools. You need:\n" +
+    "   a) Past-dated Tasks (Subject, ActivityDate) for the account\n" +
+    "   b) Past-dated Events (Subject, ActivityDate) for the account\n" +
+    "   c) Contact count for the account\n" +
+    "   d) Open Opportunities (Name, StageName, LastModifiedDate) — IsClosed = FALSE\n" +
+    `   e) Closed-Lost Opportunities (Name, CloseDate) in the last ${lookback} days\n` +
+    "   Use whatever tools are available. In Hosted mode use a SOQL query tool; in Local mode " +
+    "   use specific tools like sf_get_opportunities, sf_get_tasks, etc.\n\n" +
+    "2. Apply the bank's risk heuristics (below) DETERMINISTICALLY. Same data MUST yield the " +
+    "   same severity every time. Do not guess — compute from the rules.\n\n" +
+    "3. Determine contributing factors. Include a factor entry ONLY for signals that fired " +
+    "   Medium or High. Use clear human phrasing, for example:\n" +
+    "   - \"Last touchpoint was N days ago\"\n" +
+    "   - \"Only N activities in the last 90 days\"\n" +
+    "   - \"Single-threaded relationship — N contact on file\"\n" +
+    "   - \"X of Y open opportunities stalled (no update in 30+ days)\"\n" +
+    "   - \"N opportunities lost in the last 180 days\"\n" +
+    "   - \"No open opportunities and N closed-lost in last 180 days\"\n\n" +
+    "4. Build the metrics arrays (three per dimension):\n" +
+    "   - Engagement: Days Since Touch (or N/A), Activities (90d), Contacts\n" +
+    "   - Pipeline: Open Opps, Stalled, Closed Lost (180d)\n\n" +
+    "5. Write ONE-SENTENCE natural summaries per dimension (the only agent-written part). " +
+    "   Everything else — severity, factors, metrics — is mechanical.\n\n" +
+    "6. Handle empty states. If an account has zero activities and zero contacts (engagement) " +
+    "   or zero open opps and zero recent losses (pipeline), set emptyState: true, " +
+    "   severity: 'unknown', a summary describing the data gap, and OMIT metrics/factors.\n\n" +
+    "7. Call render_account_risk_briefing with the structured assessment.\n\n" +
+    heuristicsToPromptText()
+  );
 }
 
 // Human-readable labels for completed tool calls (shown as badges on the message)
@@ -273,9 +495,11 @@ const TOOL_LABELS: Record<string, string> = {
   sf_log_activity: "Logged activity",
   sf_update_record: "Updated record",
   sf_create_record: "Created record",
+  ask_agentforce: "Consulted Agentforce",
 };
 
 // Present-tense status shown while a tool is executing
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const TOOL_STATUS: Record<string, string> = {
   sf_list_accounts: "Listing accounts…",
   sf_get_account: "Looking up account…",
@@ -451,11 +675,71 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const body = await request.json().catch(() => null) as { messages?: ChatMessage[]; accountContext?: AccountContext } | null;
+  const body = await request.json().catch(() => null) as { messages?: ChatMessage[]; accountContext?: AccountContext; consultAgentforce?: boolean; conversationId?: string; trustLayerMode?: boolean } | null;
   if (!body?.messages?.length) {
     return NextResponse.json({ error: "messages required" }, { status: 400 });
   }
-  const { messages, accountContext } = body;
+  const { messages, accountContext, consultAgentforce, conversationId, trustLayerMode } = body;
+
+  // ── Trust Layer branch: route to Salesforce Models API ───────────────────
+  if (trustLayerMode) {
+    const settings = getSettings();
+    const selectedModel =
+      settings.trustLayerModel ??
+      process.env.SF_MODELS_DEFAULT_MODEL ??
+      SF_MODELS_DEFAULT_API_NAME;
+
+    try {
+      // Prefetch account data when the user is on an account page.
+      let prefetchedContext: PrefetchedAccountContext | undefined;
+      if (accountContext?.accountId && session.accessToken && session.instanceUrl) {
+        try {
+          console.log("[chat] prefetching account context for", accountContext.accountId);
+          prefetchedContext = await prefetchAccountContext(
+            accountContext.accountId,
+            session.accessToken,
+            session.instanceUrl,
+          );
+          console.log("[chat] prefetch complete");
+        } catch (err) {
+          console.error("[chat] prefetch failed (continuing without context):", err);
+        }
+      }
+
+      // Build system prompt with prefetched context injected.
+      const systemPrompt = buildTrustLayerSystemPrompt(accountContext, prefetchedContext);
+
+      // Prepend system message and filter/validate the conversation.
+      const flatMessages: import("@/lib/salesforce").SfModelsChatMessage[] = [
+        { role: "user", content: `[SYSTEM]\n${systemPrompt}\n[/SYSTEM]` },
+        ...messages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+      ];
+
+      const result = await sfModelsChat(flatMessages, selectedModel);
+
+      console.log("[chat] === TRUST LAYER RESPONSE TO FRONTEND ===");
+      console.log("result.text:", result.text);
+      console.log("result.text length:", result.text.length);
+      console.log("[chat] === END TRUST LAYER RESPONSE ===");
+
+      return NextResponse.json({
+        text: result.text,
+        toolCalls: [],
+        consultedAgentforce: false,
+        trustLayerMode: true,
+        modelUsed: selectedModel,
+        contextPrefetched: !!prefetchedContext,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Salesforce Models API error";
+      if (message === "SF_SESSION_EXPIRED") {
+        return NextResponse.json({ error: "SF_SESSION_EXPIRED" }, { status: 401 });
+      }
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
 
   // Reference kept outside the stream so cancel() can abort an in-flight Anthropic stream
   let currentAnthropicStream: ReturnType<typeof anthropic.messages.stream> | null = null;
@@ -485,7 +769,9 @@ export async function POST(request: NextRequest) {
             promptNames = new Set(prompts.map(p => p.name));
             const dedupedTools = deduplicateHostedTools(normalizeTools(mcpTools));
             const anthropicToolList = sanitizeToolPropertyNames([...dedupedTools, ...normalizePrompts(prompts)]);
-            return anthropicToolList;
+            // Append route-level render tools after MCP normalization/dedup
+            const baseTools = [...anthropicToolList, ...RENDER_TOOLS];
+            return consultAgentforce ? [...baseTools, ASK_AGENTFORCE_TOOL] : baseTools;
           }
 
           // Local mode: inject resources into system prompt.
@@ -495,7 +781,9 @@ export async function POST(request: NextRequest) {
           }
 
           promptNames = new Set();
-          return sanitizeToolPropertyNames(normalizeTools(mcpTools));
+          // Append route-level render tools after MCP normalization
+          const baseTools = [...sanitizeToolPropertyNames(normalizeTools(mcpTools)), ...RENDER_TOOLS];
+          return consultAgentforce ? [...baseTools, ASK_AGENTFORCE_TOOL] : baseTools;
         };
 
         try {
@@ -526,9 +814,38 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // Collected render directives from this request — last one wins
+        let pendingRenderDirective: RenderDirective | null = null;
+
         // Routes to getPrompt() for prompt-backed tools, callTool() for everything else.
         // Closes over mcpClient and promptNames so retries automatically use the refreshed client.
         const execTool = async (toolUse: Anthropic.ToolUseBlock): Promise<string> => {
+          // Route-level render tools: handled in-route, provider-independent
+          if (RENDER_TOOL_NAMES.has(toolUse.name)) {
+            const handled = handleRenderTool(
+              toolUse.name,
+              toolUse.input as Record<string, unknown>,
+              accountContext?.accountId
+            );
+            if (handled) {
+              pendingRenderDirective = handled.render;
+              return handled.text;
+            }
+          }
+
+          if (toolUse.name === "ask_agentforce") {
+            const convId = conversationId ?? `chat-${Date.now()}`;
+            const implicitCtx = accountContext
+              ? { accountId: accountContext.accountId, accountName: accountContext.accountName }
+              : undefined;
+            const result = await handleAskAgentforce(
+              toolUse.input as { question: string; account_id?: string; account_name?: string },
+              convId,
+              implicitCtx,
+            );
+            return result;
+          }
+
           if (promptNames.has(toolUse.name)) {
             const result = await mcpClient!.getPrompt({
               name: toolUse.name,
@@ -540,6 +857,10 @@ export async function POST(request: NextRequest) {
             name: toolUse.name,
             arguments: toolUse.input as ToolInput,
           });
+          // Capture render directive if tool returned one
+          if (hasRenderDirective(result)) {
+            pendingRenderDirective = result.render;
+          }
           return extractText(result.content);
         };
 
@@ -593,7 +914,7 @@ export async function POST(request: NextRequest) {
           | { kind: "mcpExpired"; toolUse: Anthropic.ToolUseBlock }
           | { kind: "mcpDropped"; toolUse: Anthropic.ToolUseBlock };
 
-        const systemPrompt = buildSystemPrompt(effectiveMode, resourceContext);
+        const systemPrompt = buildSystemPrompt(effectiveMode, resourceContext, undefined, session.instanceUrl ?? undefined, consultAgentforce);
 
         const callAnthropicWithRetry = async (
           params: Parameters<typeof anthropic.messages.stream>[0],
@@ -829,7 +1150,13 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        controller.enqueue(sseEvent({ type: "done", toolCalls: toolCallsUsed }));
+        const usedAgentforce = toolCallsUsed.some((t) => t.name === "ask_agentforce");
+        controller.enqueue(sseEvent({
+          type: "done",
+          toolCalls: toolCallsUsed,
+          render: pendingRenderDirective,
+          consultedAgentforce: usedAgentforce,
+        }));
       } catch (err) {
         const isSessionExpired =
           err instanceof Error &&
