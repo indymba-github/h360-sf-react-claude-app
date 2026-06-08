@@ -5,7 +5,7 @@ import AppShell from "@/components/AppShell";
 import ThemeProvider from "@/components/ThemeProvider";
 import { getSession } from "@/lib/session";
 import { getSettings } from "@/lib/settings";
-import { brandAccentForDarkMode, brandForegroundOn } from "@/lib/brandColors";
+import { brandAccentForDarkMode, brandForegroundOn, deriveAccentTextColor, inkDeepFromInk } from "@/lib/brandColors";
 
 const inter = Inter({ subsets: ["latin"], variable: "--loaded-inter" });
 
@@ -31,13 +31,32 @@ export default async function RootLayout({
     Promise.resolve(getSettings()),
   ]);
 
-  const overrides = [
+  const legacyInk = settings.inkColor ?? "#1B1F2A";
+  const paper     = settings.paperColor    ?? "#F4F1EA";
+  const text      = settings.textColor     ?? legacyInk;
+  const headerBg  = settings.headerBgColor ?? legacyInk;
+  const headerFg  = settings.headerFgColor ?? paper;
+
+  // Accent vars go in :root — they apply in both themes (client-side applyBrandTokens
+  // adapts them for dark mode). Surface/header vars are scoped to [data-theme="light"]
+  // so they never override [data-theme="dark"] in globals.css.
+  const accentVars = [
     `--color-accent: ${settings.accentColor};`,
     `--color-accent-on-dark: ${brandAccentForDarkMode(settings.accentColor)};`,
     `--color-accent-foreground: ${brandForegroundOn(settings.accentColor)};`,
+    `--color-accent-text: ${deriveAccentTextColor(settings.accentColor, paper)};`,
   ].join("\n  ");
 
-  const cssVars = `:root {\n  ${overrides}\n}`;
+  const lightVars = [
+    `--color-paper: ${paper};`,
+    `--color-text: ${text};`,
+    `--color-ink: ${text};`,
+    `--color-ink-deep: ${inkDeepFromInk(text)};`,
+    `--color-header-bg: ${headerBg};`,
+    `--color-header-fg: ${headerFg};`,
+  ].join("\n  ");
+
+  const cssVars = `:root {\n  ${accentVars}\n}\n[data-theme="light"] {\n  ${lightVars}\n}`;
 
   return (
     <html lang="en" className={`${inter.variable} ${sourceSerif4.variable}`}>

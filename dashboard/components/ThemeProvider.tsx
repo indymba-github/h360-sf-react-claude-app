@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect } from "react";
+import { applyBrandTokens } from "@/lib/brandColors";
+import { migratePalette } from "@/lib/demoPacks";
 
 type ThemePreference = "light" | "dark" | "system";
 
@@ -9,17 +11,22 @@ function applyTheme(pref: ThemePreference) {
     pref === "dark" ||
     (pref === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
-  // Inline styles from applyStoredSettings override CSS [data-theme] rules — remove them in dark mode
-  if (isDark) {
-    document.documentElement.style.removeProperty("--color-ink");
-    document.documentElement.style.removeProperty("--color-paper");
-  } else {
-    try {
-      const s = JSON.parse(localStorage.getItem("settings") ?? "{}") as Record<string, string>;
-      if (s.inkColor)   document.documentElement.style.setProperty("--color-ink",   s.inkColor);
-      if (s.paperColor) document.documentElement.style.setProperty("--color-paper", s.paperColor);
-    } catch {}
-  }
+
+  // Reapply brand tokens now that data-theme is set — applyBrandTokens is
+  // theme-aware and will correctly set or clear surface vars for the new mode
+  try {
+    const s = JSON.parse(localStorage.getItem("settings") ?? "{}") as Record<string, string>;
+    if (s.accentColor) {
+      const legacyInk = s.inkColor ?? "#1B1F2A";
+      applyBrandTokens(s.accentColor, migratePalette({
+        accent:   s.accentColor,
+        paper:    s.paperColor    ?? "#F4F1EA",
+        text:     s.textColor     ?? legacyInk,
+        headerBg: s.headerBgColor ?? legacyInk,
+        headerFg: s.headerFgColor ?? (s.paperColor ?? "#F4F1EA"),
+      }));
+    }
+  } catch {}
 }
 
 export default function ThemeProvider() {
@@ -27,7 +34,6 @@ export default function ThemeProvider() {
     const stored = (localStorage.getItem("theme") ?? "light") as ThemePreference;
     applyTheme(stored);
 
-    // Listen for OS theme changes when pref is "system"
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const mqHandler = () => {
       const current = (localStorage.getItem("theme") ?? "light") as ThemePreference;
@@ -35,7 +41,7 @@ export default function ThemeProvider() {
     };
     mq.addEventListener("change", mqHandler);
 
-    // Listen for programmatic theme resets (e.g. Reset to defaults)
+    // theme-changed fires when Settings changes the theme or resets all
     const resetHandler = () => {
       const current = (localStorage.getItem("theme") ?? "light") as ThemePreference;
       applyTheme(current);

@@ -1,3 +1,11 @@
+export interface Palette {
+  accent:   string;
+  paper:    string;
+  text:     string;
+  headerBg: string;
+  headerFg: string;
+}
+
 function hexToRgb(hex: string): [number, number, number] {
   return [
     parseInt(hex.slice(1, 3), 16),
@@ -18,9 +26,6 @@ function relativeLuminance(hex: string): number {
  * Returns the appropriate text color to render on top of a brand-colored
  * surface. Uses WCAG relative luminance — not just HSL lightness — so
  * saturated colors like PNC orange (L≈55% but high luminance) get dark text.
- *
- * Threshold 0.45: PNC orange (#F58025, L≈0.47) → dark text; everything
- * else in the seeded set falls below → light text.
  */
 export function brandForegroundOn(hex: string): string {
   if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return "#F4F1EA";
@@ -81,8 +86,8 @@ function hslToHex({ h, s, l }: { h: number; s: number; l: number }): string {
 }
 
 /**
- * Derives the "deep" variant of an Ink color — slightly darker, used for
- * the header bar background. Reduces HSL lightness by 6 pp, floored at 4%.
+ * Derives the "deep" variant of an ink color — slightly darker, used for
+ * secondary dark surfaces like code blocks. Reduces HSL lightness by 6 pp, floored at 4%.
  */
 export function inkDeepFromInk(hex: string): string {
   if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return hex;
@@ -91,10 +96,32 @@ export function inkDeepFromInk(hex: string): string {
 }
 
 /**
+ * Returns a darker, readable variant of the accent suitable for text on a
+ * light background. Targets WCAG AA contrast (≥4.5:1).
+ */
+export function deriveAccentTextColor(accentHex: string, paperBgHex = "#FAF7EE"): string {
+  if (!/^#[0-9a-fA-F]{6}$/.test(accentHex)) return accentHex;
+  const { h, s, l } = hexToHsl(accentHex);
+  const newS = Math.min(100, s + 12);
+  const paperLum = relativeLuminance(paperBgHex);
+
+  let newL = l;
+  while (newL > 5) {
+    const candidate = hslToHex({ h, s: newS, l: newL });
+    const candLum = relativeLuminance(candidate);
+    const lighter = Math.max(candLum, paperLum);
+    const darker  = Math.min(candLum, paperLum);
+    const ratio = (lighter + 0.05) / (darker + 0.05);
+    if (ratio >= 4.5) return candidate;
+    newL -= 2;
+  }
+  return hslToHex({ h, s: newS, l: 12 });
+}
+
+/**
  * Returns a brand accent color readable against a dark background.
  * If the color is already light enough (L >= 55%), returns it unchanged.
- * Otherwise lifts lightness to 65% and lowers saturation slightly so
- * dark navies become sky blues, dark greens become mint, etc.
+ * Otherwise lifts lightness to 65% and lowers saturation slightly.
  */
 export function brandAccentForDarkMode(hex: string): string {
   if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return hex;
@@ -108,18 +135,74 @@ export function brandAccentForDarkMode(hex: string): string {
 }
 
 /**
- * Applies brand color tokens to the document root.
- * Pass only accent to update just the accent family.
- * Pass the full palette to also update ink, ink-deep, and paper.
+ * Applies brand palette tokens to the document root, theme-aware.
+ *
+ * LIGHT MODE: full palette applied — paper, text, header bg/fg all from palette.
+ *
+ * DARK MODE: only the accent carries through. The dark theme has one consistent
+ * look (dark surfaces, light text, dark header) across all customers — the accent
+ * color is the sole brand element. All surface/header inline overrides are removed
+ * so the [data-theme="dark"] CSS defaults take over cleanly.
+ * The accent is dark-adapted so navy/dark colors remain visible on dark backgrounds.
  */
-export function applyAccentTokens(accent: string, palette?: { ink: string; paper: string }) {
+export function applyBrandTokens(accent: string, palette: Palette): void {
   const root = document.documentElement;
-  root.style.setProperty("--color-accent", accent);
-  root.style.setProperty("--color-accent-on-dark", brandAccentForDarkMode(accent));
-  root.style.setProperty("--color-accent-foreground", brandForegroundOn(accent));
-  if (palette) {
-    root.style.setProperty("--color-ink",      palette.ink);
-    root.style.setProperty("--color-ink-deep", inkDeepFromInk(palette.ink));
-    root.style.setProperty("--color-paper",    palette.paper);
+  const isDark = typeof document !== "undefined"
+    && root.getAttribute("data-theme") === "dark";
+
+  if (!isDark) {
+    // Light mode: full palette
+    const darkAdapted = brandAccentForDarkMode(accent);
+    root.style.setProperty("--color-accent",            accent);
+    root.style.setProperty("--color-accent-on-dark",    darkAdapted);
+    root.style.setProperty("--color-accent-foreground", brandForegroundOn(accent));
+    root.style.setProperty("--color-accent-text",       deriveAccentTextColor(accent, palette.paper));
+    root.style.setProperty("--color-paper",             palette.paper);
+    root.style.setProperty("--color-text",              palette.text);
+    root.style.setProperty("--color-ink",               palette.text);
+    root.style.setProperty("--color-ink-deep",          inkDeepFromInk(palette.text));
+    root.style.setProperty("--color-header-bg",         palette.headerBg);
+    root.style.setProperty("--color-header-fg",         palette.headerFg);
+  } else {
+    // Dark mode: accent only — use dark-adapted variant so dark brand colors stay visible
+    const darkAccent = brandAccentForDarkMode(accent);
+    root.style.setProperty("--color-accent",            darkAccent);
+    root.style.setProperty("--color-accent-on-dark",    darkAccent);
+    root.style.setProperty("--color-accent-foreground", brandForegroundOn(darkAccent));
+    root.style.setProperty("--color-accent-text",       darkAccent);
+    // Remove all surface/header overrides — let [data-theme="dark"] CSS defaults win
+    for (const prop of [
+      "--color-paper", "--color-text", "--color-ink", "--color-ink-deep",
+      "--color-header-bg", "--color-header-fg",
+    ]) {
+      root.style.removeProperty(prop);
+    }
   }
+}
+
+/**
+ * Legacy wrapper — kept so callers that pass a 2-field palette still work.
+ * New callers should use applyBrandTokens with a full Palette.
+ */
+export function applyAccentTokens(accent: string, legacyPalette?: { ink: string; paper: string }): void {
+  if (!legacyPalette) {
+    document.documentElement.style.setProperty("--color-accent", accent);
+    document.documentElement.style.setProperty("--color-accent-on-dark", brandAccentForDarkMode(accent));
+    document.documentElement.style.setProperty("--color-accent-foreground", brandForegroundOn(accent));
+    return;
+  }
+  applyBrandTokens(accent, {
+    accent,
+    paper:    legacyPalette.paper,
+    text:     legacyPalette.ink,
+    headerBg: legacyPalette.ink,
+    headerFg: legacyPalette.paper,
+  });
+}
+
+// deriveReadableTextOnLight is no longer needed externally — applyBrandTokens
+// uses the text field directly. Kept for backwards compat with any import.
+export function deriveReadableTextOnLight(inputHex: string, _paperBgHex = "#FAF7EE"): string {
+  if (!/^#[0-9a-fA-F]{6}$/.test(inputHex)) return "#1B1F2A";
+  return inputHex;
 }

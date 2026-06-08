@@ -4,9 +4,12 @@ import { useState, useEffect, useRef, useCallback, type DragEvent } from "react"
 import SectionHeader from "@/components/SectionHeader";
 import PresetPreview from "@/components/PresetPreview";
 import { getPresets, savePresets, restoreSeeded, newPresetId, type DemoPack } from "@/lib/demoPacks";
-import { applyAccentTokens } from "@/lib/brandColors";
+import { applyBrandTokens, applyAccentTokens } from "@/lib/brandColors";
+import { migratePalette } from "@/lib/demoPacks";
 import { getProvidersConfig, setDefaultProvider, PROVIDER_LABELS, type Provider } from "@/lib/providers";
 import { getAgentProfiles, saveAgentProfiles, getActiveAgentProfile, setActiveAgentProfile, isValidAgentId, type AgentProfile } from "@/lib/agents";
+import ModelPicker from "@/components/ModelPicker";
+import { SF_MODELS_DEFAULT_API_NAME } from "@/lib/salesforce-models-catalog";
 
 // ── localStorage helpers ───────────────────────────────────────────────────
 
@@ -16,11 +19,15 @@ const LS_PROMPTS  = "prompts.library";
 interface StoredSettings {
   accentColor?: string;
   paperColor?: string;
-  inkColor?: string;
+  inkColor?: string;       // legacy — still read for migration
+  textColor?: string;      // body text color (new)
+  headerBgColor?: string;  // header background (new)
+  headerFgColor?: string;  // header text color (new)
   displayFont?: string;
   bodyFont?: string;
   appName?: string;
   logoBase64?: string | null;
+  trustLayerModel?: string; // SF Models API name for Trust Layer mode
 }
 
 function readSettings(): StoredSettings {
@@ -35,9 +42,12 @@ function writeSettings(patch: Partial<StoredSettings>) {
 
 // ── Defaults ───────────────────────────────────────────────────────────────
 
-const DEFAULT_ACCENT       = "#946F1F";
-const DEFAULT_PAPER        = "#F4F1EA";
-const DEFAULT_INK          = "#1B1F2A";
+const DEFAULT_ACCENT    = "#946F1F";
+const DEFAULT_PAPER     = "#F4F1EA";
+const DEFAULT_TEXT      = "#1B1F2A";
+const DEFAULT_HEADER_BG = "#1B1F2A";
+const DEFAULT_HEADER_FG = "#F4F1EA";
+const DEFAULT_INK       = "#1B1F2A";  // legacy alias
 const DEFAULT_APP_NAME     = "Cumulus Bank";
 const DEFAULT_DISPLAY_FONT = "Source Serif 4";
 const DEFAULT_BODY_FONT    = "Inter";
@@ -327,55 +337,79 @@ function BrandFromWebsiteSection({ onApply }: { onApply: (result: BrandResult) =
 // ── 03 Palette section ─────────────────────────────────────────────────────
 
 function PaletteSection() {
-  const [ink,    setInkState]    = useState(DEFAULT_INK);
-  const [paper,  setPaperState]  = useState(DEFAULT_PAPER);
-  const [accent, setAccentState] = useState(DEFAULT_ACCENT);
+  const [accent,   setAccentState]   = useState(DEFAULT_ACCENT);
+  const [paper,    setPaperState]    = useState(DEFAULT_PAPER);
+  const [text,     setTextState]     = useState(DEFAULT_TEXT);
+  const [headerBg, setHeaderBgState] = useState(DEFAULT_HEADER_BG);
+  const [headerFg, setHeaderFgState] = useState(DEFAULT_HEADER_FG);
 
   useEffect(() => {
     const s = readSettings();
-    if (s.inkColor)    setInkState(s.inkColor);
-    if (s.paperColor)  setPaperState(s.paperColor);
-    if (s.accentColor) setAccentState(s.accentColor);
+    if (s.accentColor)   setAccentState(s.accentColor);
+    if (s.paperColor)    setPaperState(s.paperColor);
+    if (s.textColor)     setTextState(s.textColor);
+    else if (s.inkColor) setTextState(s.inkColor);  // migrate legacy
+    if (s.headerBgColor) setHeaderBgState(s.headerBgColor);
+    else if (s.inkColor) setHeaderBgState(s.inkColor);  // migrate legacy
+    if (s.headerFgColor) setHeaderFgState(s.headerFgColor);
   }, []);
 
-  function applyColor(variable: string, hex: string) {
-    if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
-      document.documentElement.style.setProperty(variable, hex);
-    }
-  }
-
-  function setInk(v: string) {
-    setInkState(v);
-    writeSettings({ inkColor: v });
-    applyColor("--color-ink", v);
-  }
-
-  function setPaper(v: string) {
-    setPaperState(v);
-    writeSettings({ paperColor: v });
-    applyColor("--color-paper", v);
+  function applyAll(a: string, p: string, t: string, hBg: string, hFg: string) {
+    applyBrandTokens(a, { accent: a, paper: p, text: t, headerBg: hBg, headerFg: hFg });
   }
 
   function setAccent(v: string) {
     setAccentState(v);
     writeSettings({ accentColor: v });
-    if (/^#[0-9a-fA-F]{6}$/.test(v)) applyAccentTokens(v);
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) applyAll(v, paper, text, headerBg, headerFg);
+  }
+
+  function setPaper(v: string) {
+    setPaperState(v);
+    writeSettings({ paperColor: v });
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) applyAll(accent, v, text, headerBg, headerFg);
+  }
+
+  function setText(v: string) {
+    setTextState(v);
+    writeSettings({ textColor: v });
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) applyAll(accent, paper, v, headerBg, headerFg);
+  }
+
+  function setHeaderBg(v: string) {
+    setHeaderBgState(v);
+    writeSettings({ headerBgColor: v });
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) applyAll(accent, paper, text, v, headerFg);
+  }
+
+  function setHeaderFg(v: string) {
+    setHeaderFgState(v);
+    writeSettings({ headerFgColor: v });
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) applyAll(accent, paper, text, headerBg, v);
   }
 
   function reset() {
-    setInk(DEFAULT_INK);
-    setPaper(DEFAULT_PAPER);
-    setAccent(DEFAULT_ACCENT);
-    const s = readSettings();
-    writeSettings({ ...s, inkColor: DEFAULT_INK, paperColor: DEFAULT_PAPER, accentColor: DEFAULT_ACCENT });
+    setAccentState(DEFAULT_ACCENT);
+    setPaperState(DEFAULT_PAPER);
+    setTextState(DEFAULT_TEXT);
+    setHeaderBgState(DEFAULT_HEADER_BG);
+    setHeaderFgState(DEFAULT_HEADER_FG);
+    writeSettings({
+      accentColor: DEFAULT_ACCENT, paperColor: DEFAULT_PAPER,
+      textColor: DEFAULT_TEXT, headerBgColor: DEFAULT_HEADER_BG,
+      headerFgColor: DEFAULT_HEADER_FG,
+    });
+    applyAll(DEFAULT_ACCENT, DEFAULT_PAPER, DEFAULT_TEXT, DEFAULT_HEADER_BG, DEFAULT_HEADER_FG);
   }
 
   return (
     <SectionCard>
-      <div className="flex gap-8">
-        <ColorSwatch label="Ink"    value={ink}    onChange={setInk} />
-        <ColorSwatch label="Paper"  value={paper}  onChange={setPaper} />
-        <ColorSwatch label="Accent" value={accent} onChange={setAccent} />
+      <div className="flex flex-wrap gap-6">
+        <ColorSwatch label="Accent"      value={accent}   onChange={setAccent}   />
+        <ColorSwatch label="Paper"       value={paper}    onChange={setPaper}    />
+        <ColorSwatch label="Text"        value={text}     onChange={setText}     />
+        <ColorSwatch label="Header"      value={headerBg} onChange={setHeaderBg} />
+        <ColorSwatch label="Header Text" value={headerFg} onChange={setHeaderFg} />
       </div>
       <div className="flex justify-end">
         <button
@@ -409,6 +443,21 @@ function ThemeSection() {
       v === "dark" ||
       (v === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
+
+    // Reapply brand tokens now that data-theme has changed — applyBrandTokens
+    // is theme-aware and will set/clear surface vars correctly for the new mode
+    const s = readSettings();
+    if (s.accentColor) {
+      const legacyInk = s.inkColor ?? DEFAULT_INK;
+      applyBrandTokens(s.accentColor, migratePalette({
+        accent:   s.accentColor,
+        paper:    s.paperColor    ?? DEFAULT_PAPER,
+        text:     s.textColor     ?? legacyInk,
+        headerBg: s.headerBgColor ?? legacyInk,
+        headerFg: s.headerFgColor ?? (s.paperColor ?? DEFAULT_PAPER),
+      }));
+    }
+    window.dispatchEvent(new CustomEvent("theme-changed"));
   }
 
   const options: { value: ThemePreference; label: string }[] = [
@@ -1157,7 +1206,41 @@ function AgentManager() {
   );
 }
 
-// ── 09 AI provider section ─────────────────────────────────────────────────
+// ── 09 Trust Layer Model section ──────────────────────────────────────────
+
+function TrustLayerModelSection() {
+  const [model, setModelState] = useState<string>(SF_MODELS_DEFAULT_API_NAME);
+
+  useEffect(() => {
+    const s = readSettings();
+    if (s.trustLayerModel) setModelState(s.trustLayerModel);
+  }, []);
+
+  function handleChange(apiName: string) {
+    setModelState(apiName);
+    writeSettings({ trustLayerModel: apiName });
+    // Persist to server so the chat route can read it server-side
+    void fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trustLayerModel: apiName }),
+    });
+  }
+
+  return (
+    <SectionCard>
+      <p style={{ fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-ink-soft)", lineHeight: 1.55, marginBottom: 4 }}>
+        Selects which LLM the AI assistant uses when Trust Layer mode is on. All listed
+        models route through Salesforce&rsquo;s Einstein Trust Layer for PII masking, content
+        filtering, and audit logging. Models marked &ldquo;Inside Trust Boundary&rdquo; run on
+        infrastructure within Salesforce&rsquo;s perimeter; others are hosted by Salesforce partners.
+      </p>
+      <ModelPicker value={model} onChange={handleChange} />
+    </SectionCard>
+  );
+}
+
+// ── 10 AI provider section ─────────────────────────────────────────────────
 
 function AiProviderSection() {
   const ALL_PROVIDERS: Provider[] = ["local", "hosted", "agentforce"];
@@ -1609,8 +1692,8 @@ function PresetEditPanel({
 
           <div>
             <FieldLabel>Palette</FieldLabel>
-            <div className="flex gap-4">
-              {(["accent", "paper", "ink"] as const).map((key) => (
+            <div className="flex flex-wrap gap-4">
+              {(["accent", "paper", "text", "headerBg", "headerFg"] as const).map((key) => (
                 <div key={key} className="flex items-center gap-2">
                   <input
                     type="color"
@@ -1618,7 +1701,9 @@ function PresetEditPanel({
                     onChange={(e) => setPalette(key, e.target.value)}
                     style={{ width: 28, height: 22, padding: 0, border: "0.5px solid var(--color-border)", cursor: "pointer" }}
                   />
-                  <span style={{ fontSize: "10px", fontFamily: "var(--font-body)", textTransform: "capitalize", color: "var(--color-ink-muted)" }}>{key}</span>
+                  <span style={{ fontSize: "10px", fontFamily: "var(--font-body)", color: "var(--color-ink-muted)" }}>
+                    {key === "headerBg" ? "Header" : key === "headerFg" ? "Header text" : key.charAt(0).toUpperCase() + key.slice(1)}
+                  </span>
                 </div>
               ))}
             </div>
@@ -1716,7 +1801,7 @@ function PresetsSection({ onActivate }: { onActivate: (preset: DemoPack) => void
       label: "New Preset",
       appName: "My Company",
       logoDataUrl: null,
-      palette: { accent: "#946F1F", paper: "#F4F1EA", ink: "#1B1F2A" },
+      palette: { accent: "#946F1F", paper: "#F4F1EA", text: "#1B1F2A", headerBg: "#1B1F2A", headerFg: "#F4F1EA" },
       typography: { display: "Source Serif 4", body: "Inter" },
       description: "",
       isCustom: true,
@@ -1866,11 +1951,17 @@ export default function SettingsClient({ displayName }: { displayName: string | 
   useEffect(() => {
     const s = readSettings();
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-    if (s.accentColor) {
-      const palette = (!isDark && s.inkColor && s.paperColor)
-        ? { ink: s.inkColor, paper: s.paperColor }
-        : undefined;
-      applyAccentTokens(s.accentColor, palette);
+    if (s.accentColor && !isDark) {
+      const legacyInk = s.inkColor ?? DEFAULT_INK;
+      applyBrandTokens(s.accentColor, migratePalette({
+        accent:   s.accentColor,
+        paper:    s.paperColor    ?? DEFAULT_PAPER,
+        text:     s.textColor     ?? legacyInk,
+        headerBg: s.headerBgColor ?? legacyInk,
+        headerFg: s.headerFgColor ?? (s.paperColor ?? DEFAULT_PAPER),
+      }));
+    } else if (s.accentColor && isDark) {
+      applyAccentTokens(s.accentColor);
     }
     if (s.displayFont) {
       loadGoogleFont(s.displayFont);
@@ -1892,10 +1983,12 @@ export default function SettingsClient({ displayName }: { displayName: string | 
   }
 
   async function handleResetAll() {
-    // Write defaults back to localStorage so consumers can read them synchronously
     localStorage.setItem(LS_SETTINGS, JSON.stringify({
       accentColor: DEFAULT_ACCENT,
       paperColor: DEFAULT_PAPER,
+      textColor: DEFAULT_TEXT,
+      headerBgColor: DEFAULT_HEADER_BG,
+      headerFgColor: DEFAULT_HEADER_FG,
       inkColor: DEFAULT_INK,
       displayFont: DEFAULT_DISPLAY_FONT,
       bodyFont: DEFAULT_BODY_FONT,
@@ -1904,8 +1997,10 @@ export default function SettingsClient({ displayName }: { displayName: string | 
     }));
     localStorage.setItem("theme", "light");
 
-    // Apply CSS tokens immediately
-    applyAccentTokens(DEFAULT_ACCENT, { ink: DEFAULT_INK, paper: DEFAULT_PAPER });
+    applyBrandTokens(DEFAULT_ACCENT, {
+      accent: DEFAULT_ACCENT, paper: DEFAULT_PAPER, text: DEFAULT_TEXT,
+      headerBg: DEFAULT_HEADER_BG, headerFg: DEFAULT_HEADER_FG,
+    });
     document.documentElement.style.setProperty("--font-display", `'${DEFAULT_DISPLAY_FONT}', serif`);
     document.documentElement.style.setProperty("--font-body", "'Inter', sans-serif");
     document.documentElement.setAttribute("data-theme", "light");
@@ -1926,10 +2021,9 @@ export default function SettingsClient({ displayName }: { displayName: string | 
   }
 
   function handlePresetActivate(preset: DemoPack) {
-    // Apply palette — skip ink/paper in dark mode so the dark theme tokens win
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
     if (!isDark) {
-      applyAccentTokens(preset.palette.accent, { ink: preset.palette.ink, paper: preset.palette.paper });
+      applyBrandTokens(preset.palette.accent, preset.palette);
     } else {
       applyAccentTokens(preset.palette.accent);
     }
@@ -1950,13 +2044,16 @@ export default function SettingsClient({ displayName }: { displayName: string | 
     const s = readSettings();
     writeSettings({
       ...s,
-      accentColor:  preset.palette.accent,
-      inkColor:     preset.palette.ink,
-      paperColor:   preset.palette.paper,
-      displayFont:  preset.typography.display,
-      bodyFont:     preset.typography.body,
-      appName:      preset.appName,
-      logoBase64:   preset.logoDataUrl,
+      accentColor:   preset.palette.accent,
+      paperColor:    preset.palette.paper,
+      textColor:     preset.palette.text,
+      headerBgColor: preset.palette.headerBg,
+      headerFgColor: preset.palette.headerFg,
+      inkColor:      preset.palette.headerBg,  // keep legacy field in sync
+      displayFont:   preset.typography.display,
+      bodyFont:      preset.typography.body,
+      appName:       preset.appName,
+      logoBase64:    preset.logoDataUrl,
     });
 
     // Persist app name + logo to server
@@ -1964,10 +2061,14 @@ export default function SettingsClient({ displayName }: { displayName: string | 
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        appName:   preset.appName,
-        logoBase64: preset.logoDataUrl,
-        accentColor: preset.palette.accent,
-        inkColor: preset.palette.ink,
+        appName:       preset.appName,
+        logoBase64:    preset.logoDataUrl,
+        accentColor:   preset.palette.accent,
+        paperColor:    preset.palette.paper,
+        textColor:     preset.palette.text,
+        headerBgColor: preset.palette.headerBg,
+        headerFgColor: preset.palette.headerFg,
+        inkColor:      preset.palette.headerBg,
       }),
     });
 
@@ -2093,9 +2194,15 @@ export default function SettingsClient({ displayName }: { displayName: string | 
         <PromptsLibrarySection />
       </div>
 
-      {/* 08 AI provider */}
+      {/* 08 Trust Layer Model */}
+      <div className={sectionGap}>
+        <div className="mb-4"><SectionHeader number="08" title="Trust Layer model" /></div>
+        <TrustLayerModelSection />
+      </div>
+
+      {/* 09 AI provider */}
       <div style={{ marginBottom: "72px" }}>
-        <div className="mb-4"><SectionHeader number="08" title="AI provider" /></div>
+        <div className="mb-4"><SectionHeader number="09" title="AI provider" /></div>
         <AiProviderSection />
       </div>
 

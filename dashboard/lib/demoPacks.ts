@@ -1,16 +1,37 @@
+import type { Palette } from "./brandColors";
+export type { Palette };  // re-export so existing imports from demoPacks still work
+
 const LS_LIST    = "demoPacks.list";
 const LS_VERSION = "demoPacks.version";
-const SEEDED_VERSION = "v3-cumulus-only";
+const SEEDED_VERSION = "v4-5field-palette";
 
 export interface DemoPack {
   id: string;
   label: string;
   appName: string;
   logoDataUrl: string | null;
-  palette: { accent: string; paper: string; ink: string };
+  palette: Palette;
   typography: { display: string; body: string };
   description: string;
   isCustom: boolean;
+}
+
+/**
+ * Migrate a legacy palette (with `ink` field) to the new 5-field shape.
+ * - text     = ink (body text rendered the same as before)
+ * - headerBg = ink (header rendered the same as before)
+ * - headerFg = paper (header text contrast preserved)
+ */
+export function migratePalette(p: Record<string, unknown>): Palette {
+  if (p?.text && p?.headerBg && p?.headerFg) return p as unknown as Palette;
+  const legacyInk = (p?.ink as string | undefined) ?? "#1B1F2A";
+  return {
+    accent:   (p?.accent   as string | undefined) ?? "#946F1F",
+    paper:    (p?.paper    as string | undefined) ?? "#F4F1EA",
+    text:     (p?.text     as string | undefined) ?? legacyInk,
+    headerBg: (p?.headerBg as string | undefined) ?? legacyInk,
+    headerFg: (p?.headerFg as string | undefined) ?? ((p?.paper as string | undefined) ?? "#F4F1EA"),
+  };
 }
 
 export const SEEDED_PRESETS: DemoPack[] = [
@@ -19,7 +40,13 @@ export const SEEDED_PRESETS: DemoPack[] = [
     label: "Cumulus Bank",
     appName: "Cumulus Bank",
     logoDataUrl: "/demo-packs/cumulus.svg",
-    palette: { accent: "#946F1F", paper: "#F4F1EA", ink: "#1B1F2A" },
+    palette: {
+      accent:   "#946F1F",
+      paper:    "#F4F1EA",
+      text:     "#1B1F2A",
+      headerBg: "#1B1F2A",
+      headerFg: "#F4F1EA",
+    },
     typography: { display: "Source Serif 4", body: "Inter" },
     description: "Default fictional bank — Salesforce demo.",
     isCustom: false,
@@ -32,9 +59,12 @@ export function getPresets(): DemoPack[] {
     const stored = localStorage.getItem(LS_LIST);
 
     if (storedVersion !== SEEDED_VERSION) {
-      // Version mismatch — reseed with new banks, preserve user-created customs
+      // Version mismatch — reseed, preserve user-created customs (migrate their palettes)
       const existingCustoms: DemoPack[] = stored
-        ? (JSON.parse(stored) as DemoPack[]).filter((p) => p.isCustom)
+        ? (JSON.parse(stored) as DemoPack[]).filter((p) => p.isCustom).map((p) => ({
+            ...p,
+            palette: migratePalette(p.palette as unknown as Record<string, unknown>),
+          }))
         : [];
       const newList = [...SEEDED_PRESETS, ...existingCustoms];
       localStorage.setItem(LS_LIST, JSON.stringify(newList));
@@ -42,7 +72,12 @@ export function getPresets(): DemoPack[] {
       return newList;
     }
 
-    if (stored) return JSON.parse(stored) as DemoPack[];
+    if (stored) {
+      return (JSON.parse(stored) as DemoPack[]).map((p) => ({
+        ...p,
+        palette: migratePalette(p.palette as unknown as Record<string, unknown>),
+      }));
+    }
 
     localStorage.setItem(LS_LIST, JSON.stringify(SEEDED_PRESETS));
     localStorage.setItem(LS_VERSION, SEEDED_VERSION);
