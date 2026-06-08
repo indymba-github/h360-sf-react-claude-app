@@ -202,7 +202,8 @@ export function applyAccentTokens(accent: string, legacyPalette?: { ink: string;
 
 // deriveReadableTextOnLight is no longer needed externally — applyBrandTokens
 // uses the text field directly. Kept for backwards compat with any import.
-export function deriveReadableTextOnLight(inputHex: string, _paperBgHex = "#FAF7EE"): string {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function deriveReadableTextOnLight(inputHex: string, _paperBgHex?: string): string {
   if (!/^#[0-9a-fA-F]{6}$/.test(inputHex)) return "#1B1F2A";
   return inputHex;
 }

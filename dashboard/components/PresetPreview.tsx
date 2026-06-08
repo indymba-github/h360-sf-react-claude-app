@@ -1,7 +1,7 @@
 "use client";
 
 import type { DemoPack } from "@/lib/demoPacks";
-import { deriveAccentTextColor, inkDeepFromInk } from "@/lib/brandColors";
+import { deriveAccentTextColor } from "@/lib/brandColors";
 
 interface PresetPreviewProps {
   preset: DemoPack;

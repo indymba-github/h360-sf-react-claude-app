@@ -20,6 +20,7 @@ import {
   type SFCase,
   type SFTask,
 } from "./salesforce";
+import type { FinancialAccountWithRole } from "./financial-accounts";
 
 export type PrefetchedAccountContext = {
   accountSummary: string;
@@ -66,7 +67,7 @@ function formatAccountSummary(account: SFAccount | null): string {
   if (account.Website) lines.push(`Website: ${account.Website}`);
   const location = [account.BillingCity, account.BillingState].filter(Boolean).join(", ");
   if (location) lines.push(`Location: ${location}`);
-  if ((account as any).Owner?.Name) lines.push(`Relationship Manager: ${(account as any).Owner.Name}`);
+  if (account.Owner?.Name) lines.push(`Relationship Manager: ${account.Owner.Name}`);
   if (account.Description) lines.push(`Description: ${truncate(account.Description, 300)}`);
   return lines.join("\n");
 }
@@ -105,7 +106,7 @@ function formatOpportunitiesSummary(opps: SFOpportunity[]): string {
   return lines.join("\n");
 }
 
-function formatFinancialAccountsSummary(accounts: any[]): string {
+function formatFinancialAccountsSummary(accounts: FinancialAccountWithRole[]): string {
   if (accounts.length === 0) return "FINANCIAL ACCOUNTS\nNo financial accounts found.";
   const lines: string[] = ["FINANCIAL ACCOUNTS"];
   accounts.slice(0, 15).forEach((fa) => {
