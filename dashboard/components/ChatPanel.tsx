@@ -56,12 +56,13 @@ interface Message {
   trustLayerMode?: boolean;
   modelUsed?: string;
   contextPrefetched?: boolean;
+  summaryAgentUsed?: boolean;
 }
 
 // SSE event shapes coming from the server
 interface SseToken         { type: "token";         text: string }
 interface SseStatus        { type: "status";        text: string }
-interface SseDone          { type: "done";           toolCalls: ToolCall[]; render?: RenderDirective | null; consultedAgentforce?: boolean }
+interface SseDone          { type: "done";           toolCalls: ToolCall[]; render?: RenderDirective | null; consultedAgentforce?: boolean; summaryAgentUsed?: boolean }
 interface SseError         { type: "error";          error: string }
 interface SseWriteComplete { type: "write_complete"; toolName: string; success: boolean; url: string | null }
 interface SseToolStart     { type: "tool_start";    toolId: string; toolName: string }
@@ -1321,6 +1322,7 @@ export default function ChatPanel({
                 isProposal: isProposal || undefined,
                 followUps: followUps.length > 0 ? followUps : undefined,
                 consultedAgentforce: event.consultedAgentforce || undefined,
+                summaryAgentUsed: event.summaryAgentUsed || undefined,
               },
             ]);
             // Forward render directive to parent (account detail page)
@@ -1783,6 +1785,25 @@ export default function ChatPanel({
                         >
                           <span style={{ color: "#1E40AF", fontSize: "10px" }}>✦</span>
                           Consulted Agentforce via the Einstein Trust Layer
+                        </div>
+                      )}
+                      {m.summaryAgentUsed && (
+                        <div
+                          style={{
+                            marginTop: "6px",
+                            paddingTop: "6px",
+                            borderTop: "0.5px solid var(--color-border)",
+                            fontFamily: "var(--font-body)",
+                            fontSize: "10px",
+                            fontStyle: "italic",
+                            color: "var(--color-ink-soft)",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "4px",
+                          }}
+                        >
+                          <span style={{ fontSize: "10px" }}>⊕</span>
+                          Consulted Account Summary Agent
                         </div>
                       )}
                       {m.trustLayerMode && (
