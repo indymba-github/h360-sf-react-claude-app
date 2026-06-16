@@ -13,6 +13,8 @@ import { RENDER_TOOLS, RENDER_TOOL_NAMES, handleRenderTool } from "@/lib/render-
 import { PIPELINE_HEURISTICS, heuristicsToPromptText } from "@/lib/risk-heuristics";
 import { ASK_AGENTFORCE_TOOL, handleAskAgentforce } from "@/lib/agentforce-tool";
 import { sfModelsChat } from "@/lib/salesforce";
+import { connectAccountAgentMcp, isAccountAgentEnabled, ACCOUNT_AGENT_PREFIX } from "@/lib/account-agent-mcp";
+import { classifySummaryIntent, shouldExposeSummaryAgent } from "@/lib/summary-router";
 import { getSettings } from "@/lib/settings";
 import { SF_MODELS_DEFAULT_API_NAME } from "@/lib/salesforce-models-catalog";
 import { prefetchAccountContext, formatPrefetchedContext, type PrefetchedAccountContext } from "@/lib/trust-layer-context";
@@ -747,6 +749,12 @@ export async function POST(request: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       let mcpClient: Client | null = null;
+      let accountAgentClient: Client | null = null;
+      // Tracks which tool names came from the account agent MCP (for routing call dispatch)
+      const accountAgentToolNames = new Set<string>();
+      // Agent tools stored separately so the intent router can include/exclude them
+      let agentPrefixedTools: Anthropic.Tool[] = [];
+      let exposeSummaryAgent = false;
       let promptNames = new Set<string>();
 
       try {
@@ -770,7 +778,36 @@ export async function POST(request: NextRequest) {
             const dedupedTools = deduplicateHostedTools(normalizeTools(mcpTools));
             const anthropicToolList = sanitizeToolPropertyNames([...dedupedTools, ...normalizePrompts(prompts)]);
             // Append route-level render tools after MCP normalization/dedup
-            const baseTools = [...anthropicToolList, ...RENDER_TOOLS];
+            let baseTools = [...anthropicToolList, ...RENDER_TOOLS];
+
+            // ── Opt-in: Account Summary Agent MCP ───────────────────────────
+            // Connect and discover tools, but hold them in agentPrefixedTools.
+            // The intent router (called after connectAndList) decides whether to
+            // include them in the list sent to Claude.
+            if (isAccountAgentEnabled()) {
+              try {
+                if (accountAgentClient) await accountAgentClient.close().catch(() => {});
+                accountAgentClient = await connectAccountAgentMcp();
+                const { tools: agentTools } = await accountAgentClient.listTools();
+                agentPrefixedTools = sanitizeToolPropertyNames(normalizeTools(agentTools).map((t) => ({
+                  ...t,
+                  name: `${ACCOUNT_AGENT_PREFIX}${t.name}`,
+                  description: `${t.description ?? ""} (via Account Summary Agent)`.trim(),
+                })));
+                accountAgentToolNames.clear();
+                for (const t of agentPrefixedTools) accountAgentToolNames.add(t.name);
+                console.log("[chat] === ACCOUNT AGENT TOOLS (held for routing) ===");
+                console.log("[chat] Count:", agentPrefixedTools.length);
+                console.log("[chat] Names:", agentPrefixedTools.map((t) => t.name).join(", "));
+                console.log("[chat] === END ACCOUNT AGENT TOOLS ===");
+              } catch (agentErr) {
+                console.error("[chat] Account Agent MCP failed to connect:", agentErr instanceof Error ? agentErr.message : String(agentErr));
+                accountAgentClient = null;
+                agentPrefixedTools = [];
+              }
+            }
+
+            // baseTools contains only Hosted + render tools; agent tools added after routing
             return consultAgentforce ? [...baseTools, ASK_AGENTFORCE_TOOL] : baseTools;
           }
 
@@ -814,6 +851,40 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // ── Intent-based routing for Account Summary Agent ───────────────
+        // Run classifier only when the agent is connected and has tools.
+        // Merges agent tools into anthropicTools (or leaves them out) based on intent.
+        if (accountAgentClient && agentPrefixedTools.length > 0) {
+          const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+          const lastText = typeof lastUserMsg?.content === "string"
+            ? lastUserMsg.content
+            : Array.isArray(lastUserMsg?.content)
+              ? (lastUserMsg.content as Array<{ type: string; text?: string }>)
+                  .filter((b) => b?.type === "text")
+                  .map((b) => b.text ?? "")
+                  .join(" ")
+              : "";
+
+          if (lastText.trim()) {
+            console.log("[chat] === ROUTING CHECK ===");
+            const t0 = Date.now();
+            const signals = await classifySummaryIntent(lastText, process.env.ANTHROPIC_API_KEY ?? "");
+            exposeSummaryAgent = shouldExposeSummaryAgent(signals, accountContext ?? undefined);
+            console.log("[chat] Classifier latency:", Date.now() - t0, "ms");
+            console.log("[chat] Signals:", JSON.stringify(signals));
+            console.log("[chat] Expose summary agent:", exposeSummaryAgent);
+            console.log("[chat] === END ROUTING CHECK ===");
+          }
+
+          if (exposeSummaryAgent) {
+            anthropicTools = [...anthropicTools, ...agentPrefixedTools];
+          }
+        }
+
+        console.log("[chat] === TOOLS SENT TO CLAUDE ===");
+        console.log("[chat] Total:", anthropicTools.length, "| Agent tools included:", exposeSummaryAgent ? agentPrefixedTools.length : 0);
+        console.log("[chat] === END ===");
+
         // Collected render directives from this request — last one wins
         let pendingRenderDirective: RenderDirective | null = null;
 
@@ -853,6 +924,20 @@ export async function POST(request: NextRequest) {
             });
             return extractPromptText(result);
           }
+
+          // Route aa__-prefixed tools to the Account Summary Agent MCP
+          if (accountAgentToolNames.has(toolUse.name) && accountAgentClient) {
+            const actualName = toolUse.name.slice(ACCOUNT_AGENT_PREFIX.length);
+            console.log("[chat] Routing to Account Agent MCP:", actualName);
+            const t0 = Date.now();
+            const agentResult = await accountAgentClient.callTool({
+              name: actualName,
+              arguments: toolUse.input as ToolInput,
+            });
+            console.log("[chat] Account Agent tool latency:", Date.now() - t0, "ms");
+            return extractText(agentResult.content);
+          }
+
           const result = await mcpClient!.callTool({
             name: toolUse.name,
             arguments: toolUse.input as ToolInput,
@@ -1151,11 +1236,13 @@ export async function POST(request: NextRequest) {
         }
 
         const usedAgentforce = toolCallsUsed.some((t) => t.name === "ask_agentforce");
+        const usedSummaryAgent = toolCallsUsed.some((t) => t.name?.startsWith(ACCOUNT_AGENT_PREFIX));
         controller.enqueue(sseEvent({
           type: "done",
           toolCalls: toolCallsUsed,
           render: pendingRenderDirective,
           consultedAgentforce: usedAgentforce,
+          summaryAgentUsed: usedSummaryAgent || undefined,
         }));
       } catch (err) {
         const isSessionExpired =
@@ -1175,11 +1262,8 @@ export async function POST(request: NextRequest) {
         );
       } finally {
         controller.close();
-        try {
-          await mcpClient?.close();
-        } catch {
-          // ignore cleanup errors
-        }
+        try { await mcpClient?.close(); } catch { /* ignore */ }
+        try { await (accountAgentClient as Client | null)?.close(); } catch { /* ignore */ }
       }
     },
 

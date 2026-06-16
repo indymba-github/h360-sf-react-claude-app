@@ -837,14 +837,21 @@ export interface SfModelsChatResult {
 }
 
 async function getModelsAccessToken(): Promise<string> {
+  const clientId = process.env.SF_SERVER_CLIENT_ID || process.env.SF_MODELS_CLIENT_ID;
+  const clientSecret = process.env.SF_SERVER_CLIENT_SECRET || process.env.SF_MODELS_CLIENT_SECRET;
+  if (process.env.SF_SERVER_CLIENT_ID) {
+    console.log("[salesforce-llm] Using consolidated SF_SERVER_* credentials");
+  } else {
+    console.log("[salesforce-llm] Falling back to legacy SF_MODELS_* credentials");
+  }
   const tokenUrl = `${process.env.SF_LOGIN_URL?.replace(/\/$/, "")}/services/oauth2/token`;
   const res = await fetch(tokenUrl, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "client_credentials",
-      client_id: process.env.SF_MODELS_CLIENT_ID!,
-      client_secret: process.env.SF_MODELS_CLIENT_SECRET!,
+      client_id: clientId!,
+      client_secret: clientSecret!,
     }),
   });
   if (!res.ok) {
@@ -932,6 +939,10 @@ export async function sfModelsChat(
     generations?: Array<{ text?: string; content?: string }>;
     choices?: Array<{ message?: { content?: string } }>;
   };
+
+  console.log('[sf-models] === FULL RESPONSE DUMP ===');
+  console.log(JSON.stringify(data, null, 2));
+  console.log('[sf-models] === END FULL RESPONSE ===');
 
   const generations = data.generationDetails?.generations ?? [];
   const text =

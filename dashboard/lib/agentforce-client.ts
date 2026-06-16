@@ -19,8 +19,13 @@ export async function getAgentClientCredentialsToken(): Promise<string> {
   if (pendingTokenFetch) return pendingTokenFetch;
 
   const loginUrl = (process.env.SF_LOGIN_URL ?? "").replace(/\/$/, "");
-  const clientId = process.env.SF_AGENT_CLIENT_ID ?? "";
-  const clientSecret = process.env.SF_AGENT_CLIENT_SECRET ?? "";
+  const clientId = process.env.SF_SERVER_CLIENT_ID || process.env.SF_AGENT_CLIENT_ID || "";
+  const clientSecret = process.env.SF_SERVER_CLIENT_SECRET || process.env.SF_AGENT_CLIENT_SECRET || "";
+  if (process.env.SF_SERVER_CLIENT_ID) {
+    console.log("[agentforce-client] Using consolidated SF_SERVER_* credentials");
+  } else {
+    console.log("[agentforce-client] Falling back to legacy SF_AGENT_* credentials");
+  }
 
   pendingTokenFetch = (async () => {
     const res = await fetch(`${loginUrl}/services/oauth2/token`, {
