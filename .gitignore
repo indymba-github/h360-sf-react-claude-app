@@ -30,3 +30,9 @@ get-mcp-token.sh
 sf-mcp-dashboard-blueprint.md
 wiki/
 .claude/
+
+# Credential / secrets files — never commit
+OrgFarm - Creds:
+*Creds*
+*.env.local original
+*.env original
