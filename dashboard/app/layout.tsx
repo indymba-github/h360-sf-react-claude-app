@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Source_Serif_4 } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import AppShell from "@/components/AppShell";
 import ThemeProvider from "@/components/ThemeProvider";
@@ -64,6 +65,8 @@ export default async function RootLayout({
         {cssVars && <style dangerouslySetInnerHTML={{ __html: cssVars }} />}
       </head>
       <body className="antialiased">
+        <meta name="aiqa-project" content="sf-mcp-dashboard" />
+        <Script src="http://127.0.0.1:8765/aiqa-widget.js" strategy="afterInteractive" />
         <ThemeProvider />
         <AppShell
           displayName={session.displayName}

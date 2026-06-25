@@ -202,7 +202,7 @@ export function applyAccentTokens(accent: string, legacyPalette?: { ink: string;
 
 // deriveReadableTextOnLight is no longer needed externally — applyBrandTokens
 // uses the text field directly. Kept for backwards compat with any import.
-export function deriveReadableTextOnLight(inputHex: string, _paperBgHex = "#FAF7EE"): string {
-  if (!/^#[0-9a-fA-F]{6}$/.test(inputHex)) return "#1B1F2A";
+export function deriveReadableTextOnLight(inputHex: string, paperBgHex = "#FAF7EE"): string {
+  if (!/^#[0-9a-fA-F]{6}$/.test(inputHex) || !/^#[0-9a-fA-F]{6}$/.test(paperBgHex)) return "#1B1F2A";
   return inputHex;
 }

@@ -1,11 +1,19 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, type DragEvent } from "react";
+import Image from "next/image";
 import SectionHeader from "@/components/SectionHeader";
 import PresetPreview from "@/components/PresetPreview";
 import { getPresets, savePresets, restoreSeeded, newPresetId, type DemoPack } from "@/lib/demoPacks";
 import { applyBrandTokens, applyAccentTokens } from "@/lib/brandColors";
 import { migratePalette } from "@/lib/demoPacks";
+import {
+  buildBrandSettingsPatch,
+  buildPresetFromBrandResult,
+  buildServerSettingsPayload,
+  paletteFromBrandResult,
+  type ExtractedBrandResult,
+} from "@/lib/brand-settings";
 import { getProvidersConfig, setDefaultProvider, PROVIDER_LABELS, type Provider } from "@/lib/providers";
 import { getAgentProfiles, saveAgentProfiles, getActiveAgentProfile, setActiveAgentProfile, isValidAgentId, type AgentProfile } from "@/lib/agents";
 import ModelPicker from "@/components/ModelPicker";
@@ -206,15 +214,9 @@ function ColorSwatch({ label, value, onChange }: { label: string; value: string;
 
 // ── Brand extraction preview ───────────────────────────────────────────────
 
-interface BrandResult {
-  companyName: string | null;
-  colors: { primary: string | null; secondary: string | null; accent: string | null; all: string[] };
-  fonts: { heading: string | null; body: string | null };
-  logoUrl: string | null;
-  logo: string | null;
-}
+type BrandResult = ExtractedBrandResult;
 
-function BrandPreviewCard({ result, onApply }: { result: BrandResult; onApply: () => void }) {
+function BrandPreviewCard({ result, onApply, onSavePreset }: { result: BrandResult; onApply: () => void; onSavePreset: () => void }) {
   return (
     <div className="p-4 space-y-3" style={{ background: "var(--color-paper)", border: "0.5px solid var(--color-border)", marginTop: 4 }}>
       {result.companyName && (
@@ -236,13 +238,22 @@ function BrandPreviewCard({ result, onApply }: { result: BrandResult; onApply: (
           {[result.fonts.heading, result.fonts.body].filter(Boolean).join(" · ")}
         </p>
       )}
-      <button
-        onClick={onApply}
-        className="px-4 py-1.5 text-xs font-medium transition-opacity hover:opacity-80"
-        style={{ background: "var(--color-accent)", color: "var(--color-accent-foreground)", fontFamily: "var(--font-body)", fontSize: "11px" }}
-      >
-        Apply to settings
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={onApply}
+          className="px-4 py-1.5 text-xs font-medium transition-opacity hover:opacity-80"
+          style={{ background: "var(--color-accent)", color: "var(--color-accent-foreground)", fontFamily: "var(--font-body)", fontSize: "11px" }}
+        >
+          Apply to settings
+        </button>
+        <button
+          onClick={onSavePreset}
+          className="px-4 py-1.5 text-xs font-medium transition-opacity hover:opacity-80"
+          style={{ background: "var(--color-paper)", color: "var(--color-ink-muted)", border: "0.5px solid var(--color-border)", fontFamily: "var(--font-body)", fontSize: "11px" }}
+        >
+          Save as preset
+        </button>
+      </div>
     </div>
   );
 }
@@ -276,11 +287,12 @@ function ProfileSection({ displayName }: { displayName: string | null }) {
 
 // ── 02 Brand from website section ─────────────────────────────────────────
 
-function BrandFromWebsiteSection({ onApply }: { onApply: (result: BrandResult) => void }) {
+function BrandFromWebsiteSection({ onApply, onSavePreset }: { onApply: (result: BrandResult) => void; onSavePreset: (result: BrandResult, sourceUrl: string) => DemoPack }) {
   const [url, setUrl]           = useState("");
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState<string | null>(null);
   const [result, setResult]     = useState<BrandResult | null>(null);
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
 
   async function handleExtract() {
     const trimmed = url.trim();
@@ -288,6 +300,7 @@ function BrandFromWebsiteSection({ onApply }: { onApply: (result: BrandResult) =
     setLoading(true);
     setError(null);
     setResult(null);
+    setSavedMsg(null);
     try {
       const res = await fetch("/api/settings/extract-brand", {
         method: "POST",
@@ -302,6 +315,12 @@ function BrandFromWebsiteSection({ onApply }: { onApply: (result: BrandResult) =
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleSavePreset() {
+    if (!result) return;
+    const preset = onSavePreset(result, url.trim());
+    setSavedMsg(`Saved "${preset.label}" to presets.`);
   }
 
   return (
@@ -328,7 +347,10 @@ function BrandFromWebsiteSection({ onApply }: { onApply: (result: BrandResult) =
         <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-danger)" }}>{error}</p>
       )}
       {result && (
-        <BrandPreviewCard result={result} onApply={() => onApply(result)} />
+        <BrandPreviewCard result={result} onApply={() => onApply(result)} onSavePreset={handleSavePreset} />
+      )}
+      {savedMsg && (
+        <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-success)" }}>{savedMsg}</p>
       )}
     </SectionCard>
   );
@@ -801,9 +823,12 @@ function BrandingSection() {
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    const s = readSettings();
-    if (s.appName)    setAppNameState(s.appName);
-    if (s.logoBase64) setLogoState(s.logoBase64);
+    const syncFromSettings = () => {
+      const s = readSettings();
+      setAppNameState(s.appName ?? DEFAULT_APP_NAME);
+      setLogoState(s.logoBase64 ?? null);
+      setSaveMsg(null);
+    };
 
     const handleReset = () => {
       setAppNameState(DEFAULT_APP_NAME);
@@ -811,8 +836,14 @@ function BrandingSection() {
       setSaveMsg(null);
       if (fileRef.current) fileRef.current.value = "";
     };
+
+    syncFromSettings();
+    window.addEventListener("branding-changed", syncFromSettings);
     window.addEventListener("branding-reset", handleReset);
-    return () => window.removeEventListener("branding-reset", handleReset);
+    return () => {
+      window.removeEventListener("branding-changed", syncFromSettings);
+      window.removeEventListener("branding-reset", handleReset);
+    };
   }, []);
 
   function handleNameChange(v: string) {
@@ -890,7 +921,7 @@ function BrandingSection() {
             style={{ width: 44, height: 44, background: "var(--color-paper)", border: "0.5px solid var(--color-border)" }}
           >
             {logo ? (
-              <img src={logo} alt="Logo" style={{ width: 28, height: 28, objectFit: "contain" }} />
+              <Image src={logo} alt="Logo" width={28} height={28} unoptimized style={{ objectFit: "contain" }} />
             ) : (
               <svg className="w-5 h-5" style={{ color: "var(--color-ink-soft)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
@@ -1664,7 +1695,7 @@ function PresetEditPanel({
                 overflow: "hidden",
               }}>
                 {draft.logoDataUrl ? (
-                  <img src={draft.logoDataUrl} alt="Logo" style={{ width: 32, height: 32, objectFit: "contain" }} />
+                  <Image src={draft.logoDataUrl} alt="Logo" width={32} height={32} unoptimized style={{ objectFit: "contain" }} />
                 ) : (
                   <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ color: "var(--color-ink-soft)" }}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75 7.409 10.59a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
@@ -1751,8 +1782,13 @@ function PresetsSection({ onActivate }: { onActivate: (preset: DemoPack) => void
   const [activeId, setActiveId] = useState<string | null>(null);
 
   useEffect(() => {
-    setPresets(getPresets());
-    setActiveId(localStorage.getItem("demo-active-preset"));
+    const refresh = () => {
+      setPresets(getPresets());
+      setActiveId(localStorage.getItem("demo-active-preset"));
+    };
+    refresh();
+    window.addEventListener("presets-changed", refresh);
+    return () => window.removeEventListener("presets-changed", refresh);
   }, []);
 
   function persist(updated: DemoPack[]) {
@@ -1977,9 +2013,22 @@ export default function SettingsClient({ displayName }: { displayName: string | 
     setLastSaved(new Date());
   }, []);
 
-  function handleSave() {
-    // All settings are already in localStorage via autosave — reload so SSR re-renders with current values
-    window.location.reload();
+  async function handleSave() {
+    const payload = buildServerSettingsPayload(readSettings());
+    if (Object.keys(payload).length > 0) {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) return;
+    }
+
+    window.dispatchEvent(new CustomEvent("branding-changed"));
+    window.dispatchEvent(new CustomEvent("theme-changed"));
+    setLastSaved(new Date());
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 2000);
   }
 
   async function handleResetAll() {
@@ -2005,7 +2054,7 @@ export default function SettingsClient({ displayName }: { displayName: string | 
     document.documentElement.style.setProperty("--font-body", "'Inter', sans-serif");
     document.documentElement.setAttribute("data-theme", "light");
 
-    // Notify HeaderBar and other consumers that branding/theme has changed immediately
+    // Notify HeaderBar and other consumers that branding/theme has reset immediately
     window.dispatchEvent(new CustomEvent("branding-reset"));
     window.dispatchEvent(new CustomEvent("theme-changed"));
 
@@ -2072,50 +2121,46 @@ export default function SettingsClient({ displayName }: { displayName: string | 
       }),
     });
 
-    window.dispatchEvent(new CustomEvent("branding-reset"));
+    window.dispatchEvent(new CustomEvent("branding-changed"));
     window.dispatchEvent(new CustomEvent("theme-changed"));
   }
 
   async function handleBrandApply(result: BrandResult) {
-    const patch: Partial<StoredSettings> = {};
+    const patch = buildBrandSettingsPatch(result);
+    const palette = paletteFromBrandResult(result);
+    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
 
-    // Pick best color — prefer primary, fallback to first available
-    const color = result.colors.primary ?? result.colors.accent ?? result.colors.secondary;
-    if (color) {
-      applyAccentTokens(color);
-      patch.accentColor = color;
+    if (!isDark) applyBrandTokens(palette.accent, palette);
+    else applyAccentTokens(palette.accent);
+
+    if (patch.displayFont) {
+      loadGoogleFont(patch.displayFont);
+      document.documentElement.style.setProperty("--font-display", patch.displayFont === "system-ui" ? "system-ui, sans-serif" : `'${patch.displayFont}', serif`);
     }
-    if (result.fonts.heading) {
-      loadGoogleFont(result.fonts.heading);
-      document.documentElement.style.setProperty("--font-display", `'${result.fonts.heading}', serif`);
-      patch.displayFont = result.fonts.heading;
-    }
-    if (result.fonts.body) {
-      loadGoogleFont(result.fonts.body);
-      document.documentElement.style.setProperty("--font-body", `'${result.fonts.body}', sans-serif`);
-      patch.bodyFont = result.fonts.body;
+    if (patch.bodyFont) {
+      loadGoogleFont(patch.bodyFont);
+      document.documentElement.style.setProperty("--font-body", patch.bodyFont === "system-ui" ? "system-ui, sans-serif" : `'${patch.bodyFont}', sans-serif`);
     }
 
-    const serverPatch: Record<string, unknown> = {};
-    if (result.companyName) {
-      patch.appName = result.companyName;
-      serverPatch.appName = result.companyName;
-    }
-    if (result.logo) {
-      patch.logoBase64 = result.logo;
-      serverPatch.logoBase64 = result.logo;
-    }
-    if (patch.accentColor) serverPatch.accentColor = patch.accentColor;
+    writeSettings({ ...readSettings(), ...patch });
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildServerSettingsPayload(patch)),
+    });
 
-    if (Object.keys(patch).length > 0) writeSettings(patch);
-    if (Object.keys(serverPatch).length > 0) {
-      await fetch("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(serverPatch),
-      });
-    }
-    window.location.reload();
+    window.dispatchEvent(new CustomEvent("branding-changed"));
+    window.dispatchEvent(new CustomEvent("theme-changed"));
+    setLastSaved(new Date());
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 2000);
+  }
+
+  function handleBrandSavePreset(result: BrandResult, sourceUrl: string): DemoPack {
+    const preset = buildPresetFromBrandResult(result, newPresetId(), sourceUrl);
+    savePresets([...getPresets(), preset]);
+    window.dispatchEvent(new CustomEvent("presets-changed"));
+    return preset;
   }
 
   const sectionGap = "mb-10";
@@ -2158,7 +2203,7 @@ export default function SettingsClient({ displayName }: { displayName: string | 
       {/* 02 Brand from website */}
       <div className={sectionGap}>
         <div className="mb-4"><SectionHeader number="02" title="Brand from website" /></div>
-        <BrandFromWebsiteSection onApply={handleBrandApply} />
+        <BrandFromWebsiteSection onApply={handleBrandApply} onSavePreset={handleBrandSavePreset} />
       </div>
 
       {/* 03 App name & logo */}

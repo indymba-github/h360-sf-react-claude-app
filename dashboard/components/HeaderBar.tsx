@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useNotificationPoller } from "@/hooks/useNotificationPoller";
@@ -41,14 +42,18 @@ export default function HeaderBar({ appName: serverAppName, logoSrc: serverLogoS
   const [logoSrc, setLogoSrc] = useState<string | null | undefined>(serverLogoSrc);
 
   useEffect(() => {
-    // Only update from localStorage when Reset fires (handler writes defaults before dispatching)
+    // Keep the header in sync with settings changes without requiring a reload.
     const handler = () => {
       const { appName: n, logoSrc: l } = readBrandingFromStorage(serverAppName, serverLogoSrc);
       setAppName(n);
       setLogoSrc(l);
     };
+    window.addEventListener("branding-changed", handler);
     window.addEventListener("branding-reset", handler);
-    return () => window.removeEventListener("branding-reset", handler);
+    return () => {
+      window.removeEventListener("branding-changed", handler);
+      window.removeEventListener("branding-reset", handler);
+    };
   }, [serverAppName, serverLogoSrc]);
 
   const initials = userName
@@ -70,10 +75,13 @@ export default function HeaderBar({ appName: serverAppName, logoSrc: serverLogoS
           className="flex items-center justify-center overflow-hidden shrink-0"
           style={{ width: 30, height: 30, borderRadius: 3, background: "color-mix(in srgb, var(--color-header-fg) 12%, transparent)" }}
         >
-          <img
+          <Image
             src={logoSrc ?? "/cumulus-logo.svg"}
             alt={appName}
-            style={{ width: 26, height: 26, objectFit: "contain" }}
+            width={26}
+            height={26}
+            unoptimized
+            style={{ objectFit: "contain" }}
           />
         </div>
         <span
