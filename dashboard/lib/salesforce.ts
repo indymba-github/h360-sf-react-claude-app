@@ -898,14 +898,6 @@ export async function sfModelsChat(
     `https://api.salesforce.com/einstein/platform/v1/models/` +
     `${encodeURIComponent(modelApiName)}/chat-generations`;
 
-  console.log('[sf-models] === REQUEST ===');
-  console.log('URL:', url);
-  console.log('Model:', modelApiName);
-  console.log('Token (first 50 chars):', accessToken.substring(0, 50));
-  console.log('Body messages count:', filtered.length);
-  console.log('Body roles:', filtered.map((m) => m.role).join(','));
-  console.log('Body last message:', JSON.stringify(filtered[filtered.length - 1], null, 2));
-  console.log('[sf-models] === END REQUEST ===');
 
   const res = await fetch(url, {
     method: "POST",
@@ -924,11 +916,6 @@ export async function sfModelsChat(
 
   const responseText = await res.text();
 
-  console.log('[sf-models] === RESPONSE ===');
-  console.log('Status:', res.status, res.statusText);
-  console.log('OK:', res.ok);
-  console.log('Body:', responseText);
-  console.log('[sf-models] === END RESPONSE ===');
 
   if (!res.ok) {
     throw new Error(`Salesforce Models API error ${res.status}: ${responseText}`);
@@ -940,9 +927,6 @@ export async function sfModelsChat(
     choices?: Array<{ message?: { content?: string } }>;
   };
 
-  console.log('[sf-models] === FULL RESPONSE DUMP ===');
-  console.log(JSON.stringify(data, null, 2));
-  console.log('[sf-models] === END FULL RESPONSE ===');
 
   const generations = data.generationDetails?.generations ?? [];
   const text =
@@ -952,11 +936,6 @@ export async function sfModelsChat(
     data.choices?.[0]?.message?.content ??
     "");
 
-  console.log('[sf-models] === EXTRACTED ===');
-  console.log('Generations count:', generations.length);
-  console.log('Extracted text:', text);
-  console.log('Text length:', text.length);
-  console.log('[sf-models] === END EXTRACTED ===');
 
   return { text: text || "(Models API returned no text.)" };
 }

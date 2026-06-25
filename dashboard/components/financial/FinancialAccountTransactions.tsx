@@ -82,7 +82,7 @@ export default function FinancialAccountTransactions({
   if (error)
     return (
       <div style={{ ...stateStyle, color: "var(--color-danger)" }}>
-        Couldn't load transactions: {error}
+        Couldn&apos;t load transactions: {error}
       </div>
     );
 

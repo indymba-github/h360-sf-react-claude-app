@@ -75,6 +75,20 @@ export default function MicButton({ onTranscriptionUpdate, onRecordingChange, on
     setSupported(!!(window.SpeechRecognition ?? window.webkitSpeechRecognition));
   }, []);
 
+  const stopRecording = useCallback(() => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    recordingRef.current = false;
+    setRecording(false);
+    onRecordingChange(false);
+    try {
+      recognitionRef.current?.stop();
+    } catch {}
+    recognitionRef.current = null;
+  }, [onRecordingChange]);
+
   const startRecording = useCallback(() => {
     if (recordingRef.current || denied) return;
 
@@ -130,21 +144,7 @@ export default function MicButton({ onTranscriptionUpdate, onRecordingChange, on
     } catch {
       // Recognition already started or another error — ignore
     }
-  }, [denied, onTranscriptionUpdate, onRecordingChange]);
-
-  const stopRecording = useCallback(() => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
-    recordingRef.current = false;
-    setRecording(false);
-    onRecordingChange(false);
-    try {
-      recognitionRef.current?.stop();
-    } catch {}
-    recognitionRef.current = null;
-  }, [onRecordingChange]);
+  }, [denied, onDenied, onTranscriptionUpdate, onRecordingChange, stopRecording]);
 
   // Cleanup on unmount
   useEffect(() => () => {

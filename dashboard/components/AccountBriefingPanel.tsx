@@ -250,7 +250,7 @@ export default function AccountBriefingPanel({ accountId, accountName }: Props) 
       setErrorMsg(err instanceof Error ? err.message : "Unexpected error");
       setStatus("error");
     }
-  }, [accountId, activeChip, status]);
+  }, [accountId, accountName, activeChip, status]);
 
   const handleBriefingChoiceSelected = useCallback(async (choice: AgentforceRecordChoice) => {
     setPendingChoices(null);

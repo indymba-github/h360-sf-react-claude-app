@@ -1,0 +1,9 @@
+[mcp_servers.salesforce-hosted]
+url = "https://api.salesforce.com/platform/mcp/v1/custom/sfmcpdashboard"
+
+[mcp_servers.salesforce-hosted.http_headers]
+Authorization = "Bearer PASTE_YOUR_FULL_MCP_TOKEN_HERE"
+Accept = "application/json, text/event-stream"
+
+[mcp_servers.salesforce-sobject-all]
+url = "https://api.salesforce.com/platform/mcp/v1/platform/sobject-all"
