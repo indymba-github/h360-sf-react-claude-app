@@ -17,7 +17,7 @@ import { connectAccountAgentMcp, isAccountAgentEnabled, ACCOUNT_AGENT_PREFIX } f
 import { classifySummaryIntent, shouldExposeSummaryAgent } from "@/lib/summary-router";
 import { getSettings } from "@/lib/settings";
 import { SF_MODELS_DEFAULT_API_NAME } from "@/lib/salesforce-models-catalog";
-import { prefetchAccountContext, formatPrefetchedContext, type PrefetchedAccountContext } from "@/lib/trust-layer-context";
+import { prefetchAccountContext, formatPrefetchedContext } from "@/lib/trust-layer-context";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -363,7 +363,7 @@ function buildDocumentContentRule(): string {
 
 function buildTrustLayerSystemPrompt(
   accountContext?: AccountContext,
-  prefetchedContext?: PrefetchedAccountContext,
+  collectedContext = "",
 ): string {
   const dateStr = new Date().toLocaleDateString("en-US", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
@@ -377,14 +377,14 @@ function buildTrustLayerSystemPrompt(
     `Current date: ${dateStr}.`,
   );
 
-  if (prefetchedContext && accountContext?.accountName) {
+  if (collectedContext.trim() && accountContext?.accountName) {
     parts.push(
       `══════════════════════════════════════════════════\n` +
       `ACCOUNT CONTEXT FOR THIS CONVERSATION\n` +
       `══════════════════════════════════════════════════\n\n` +
       `The user is currently viewing the Salesforce Account "${accountContext.accountName}". ` +
       `Use the data below as your PRIMARY source when answering questions about this account.\n\n` +
-      formatPrefetchedContext(prefetchedContext),
+      collectedContext,
     );
     parts.push(
       `IMPORTANT BEHAVIOR RULES:\n` +
@@ -394,6 +394,14 @@ function buildTrustLayerSystemPrompt(
       `3. If the user asks about a different account, explain that you only have data for the currently viewed account ` +
       `and suggest they navigate to that account first.\n` +
       `4. Be concise and reference the data directly.`,
+    );
+  } else if (collectedContext.trim()) {
+    parts.push(
+      `══════════════════════════════════════════════════\n` +
+      `SALESFORCE CONTEXT FOR THIS CONVERSATION\n` +
+      `══════════════════════════════════════════════════\n\n` +
+      `Use the data below as your PRIMARY source. Do not invent or assume beyond it.\n\n` +
+      collectedContext,
     );
   } else if (accountContext?.accountName) {
     parts.push(
@@ -651,6 +659,105 @@ function extractPromptText(result: Awaited<ReturnType<Client["getPrompt"]>>): st
     .join("\n\n");
 }
 
+
+interface TrustLayerContextCollection {
+  text: string;
+  source: "mcp" | "rest" | "none";
+}
+
+async function collectTrustLayerMcpContext({
+  accessToken,
+  instanceUrl,
+  mcpAccessToken,
+  effectiveMode,
+  accountContext,
+}: {
+  accessToken: string;
+  instanceUrl: string;
+  mcpAccessToken?: string;
+  effectiveMode: McpMode;
+  accountContext?: AccountContext;
+}): Promise<TrustLayerContextCollection> {
+  let client: Client | null = null;
+
+  try {
+    client = await connectMcpClient(accessToken, instanceUrl, mcpAccessToken, effectiveMode);
+    const { tools } = await client.listTools();
+    const available = new Set(tools.map((tool) => tool.name));
+    const sections: string[] = [];
+
+    const callIfAvailable = async (
+      toolName: string,
+      title: string,
+      args: ToolInput,
+    ) => {
+      if (!available.has(toolName)) return;
+      const result = await client!.callTool({ name: toolName, arguments: args });
+      sections.push(`${title}\n${extractText(result.content)}`);
+    };
+
+    if (accountContext?.accountId) {
+      const accountArgs = { account_id: accountContext.accountId };
+      await callIfAvailable("sf_get_account", "ACCOUNT", accountArgs);
+      await callIfAvailable("sf_get_opportunities", "OPPORTUNITIES", { ...accountArgs, limit: 20 });
+      await callIfAvailable("sf_get_contacts", "CONTACTS", { ...accountArgs, limit: 20 });
+      await callIfAvailable("sf_get_cases", "CASES", { ...accountArgs, limit: 20 });
+      await callIfAvailable("sf_get_financial_accounts", "FINANCIAL ACCOUNTS", { ...accountArgs, limit: 20 });
+      await callIfAvailable("sf_get_news_alerts", "NEWS ALERTS", { ...accountArgs, limit: 10 });
+      await callIfAvailable("sf_get_tasks", "TASKS", { ...accountArgs, limit: 20 });
+    } else {
+      await callIfAvailable("sf_get_pipeline_summary", "PIPELINE SUMMARY", {});
+      await callIfAvailable("sf_get_recent_activity", "RECENT ACTIVITY", { limit: 20 });
+      await callIfAvailable("sf_list_accounts", "ACCOUNTS", { limit: 20 });
+      await callIfAvailable("sf_get_news_alerts", "NEWS ALERTS", { limit: 10 });
+    }
+
+    if (sections.length === 0) return { text: "", source: "none" };
+    return { text: sections.join("\n\n---\n\n"), source: "mcp" };
+  } finally {
+    if (client) await client.close().catch(() => {});
+  }
+}
+
+async function collectTrustLayerContext({
+  accessToken,
+  instanceUrl,
+  mcpAccessToken,
+  effectiveMode,
+  accountContext,
+}: {
+  accessToken: string;
+  instanceUrl: string;
+  mcpAccessToken?: string;
+  effectiveMode: McpMode;
+  accountContext?: AccountContext;
+}): Promise<TrustLayerContextCollection> {
+  try {
+    const mcpContext = await collectTrustLayerMcpContext({
+      accessToken,
+      instanceUrl,
+      mcpAccessToken,
+      effectiveMode,
+      accountContext,
+    });
+    if (mcpContext.text.trim()) return mcpContext;
+  } catch (err) {
+    console.warn("[chat] Trust Layer MCP context collection failed; falling back when possible:", err);
+  }
+
+  if (accountContext?.accountId) {
+    const prefetchedContext = await prefetchAccountContext(
+      accountContext.accountId,
+      accessToken,
+      instanceUrl,
+    );
+    const text = formatPrefetchedContext(prefetchedContext);
+    if (text.trim()) return { text, source: "rest" };
+  }
+
+  return { text: "", source: "none" };
+}
+
 export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session.accessToken || !session.instanceUrl) {
@@ -692,24 +799,15 @@ export async function POST(request: NextRequest) {
       SF_MODELS_DEFAULT_API_NAME;
 
     try {
-      // Prefetch account data when the user is on an account page.
-      let prefetchedContext: PrefetchedAccountContext | undefined;
-      if (accountContext?.accountId && session.accessToken && session.instanceUrl) {
-        try {
-          console.log("[chat] prefetching account context for", accountContext.accountId);
-          prefetchedContext = await prefetchAccountContext(
-            accountContext.accountId,
-            session.accessToken,
-            session.instanceUrl,
-          );
-          console.log("[chat] prefetch complete");
-        } catch (err) {
-          console.error("[chat] prefetch failed (continuing without context):", err);
-        }
-      }
+      const collectedContext = await collectTrustLayerContext({
+        accessToken: session.accessToken,
+        instanceUrl: session.instanceUrl,
+        mcpAccessToken: session.mcpAccessToken,
+        effectiveMode,
+        accountContext,
+      });
 
-      // Build system prompt with prefetched context injected.
-      const systemPrompt = buildTrustLayerSystemPrompt(accountContext, prefetchedContext);
+      const systemPrompt = buildTrustLayerSystemPrompt(accountContext, collectedContext.text);
 
       // Prepend system message and filter/validate the conversation.
       const flatMessages: import("@/lib/salesforce").SfModelsChatMessage[] = [
@@ -721,10 +819,6 @@ export async function POST(request: NextRequest) {
 
       const result = await sfModelsChat(flatMessages, selectedModel);
 
-      console.log("[chat] === TRUST LAYER RESPONSE TO FRONTEND ===");
-      console.log("result.text:", result.text);
-      console.log("result.text length:", result.text.length);
-      console.log("[chat] === END TRUST LAYER RESPONSE ===");
 
       return NextResponse.json({
         text: result.text,
@@ -732,7 +826,8 @@ export async function POST(request: NextRequest) {
         consultedAgentforce: false,
         trustLayerMode: true,
         modelUsed: selectedModel,
-        contextPrefetched: !!prefetchedContext,
+        contextPrefetched: collectedContext.source !== "none",
+        contextSource: collectedContext.source,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Salesforce Models API error";
@@ -778,7 +873,7 @@ export async function POST(request: NextRequest) {
             const dedupedTools = deduplicateHostedTools(normalizeTools(mcpTools));
             const anthropicToolList = sanitizeToolPropertyNames([...dedupedTools, ...normalizePrompts(prompts)]);
             // Append route-level render tools after MCP normalization/dedup
-            let baseTools = [...anthropicToolList, ...RENDER_TOOLS];
+            const baseTools = [...anthropicToolList, ...RENDER_TOOLS];
 
             // ── Opt-in: Account Summary Agent MCP ───────────────────────────
             // Connect and discover tools, but hold them in agentPrefixedTools.
