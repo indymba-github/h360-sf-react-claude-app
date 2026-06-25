@@ -19,6 +19,14 @@ import { useAiContext } from "@/lib/use-ai-context";
 import MicButton from "@/components/MicButton";
 import type { RenderDirective } from "@/lib/render-directives";
 import { findModelByApiName } from "@/lib/salesforce-models-catalog";
+import {
+  RESPONSE_PATH_LABELS,
+  getNextResponseDescription,
+  getResponsePathDetail,
+  getSelectableResponsePaths,
+  normalizeResponsePath,
+  type ResponsePath,
+} from "@/lib/response-path";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -56,7 +64,10 @@ interface Message {
   trustLayerMode?: boolean;
   modelUsed?: string;
   contextPrefetched?: boolean;
+  contextSource?: "mcp" | "rest" | "none";
   summaryAgentUsed?: boolean;
+  responseBaseMode?: McpMode;
+  responsePath?: ResponsePath;
 }
 
 // SSE event shapes coming from the server
@@ -519,12 +530,6 @@ function McpConnectPrompt({ onCancel }: { onCancel: () => void }) {
 
 type McpMode = "local" | "hosted" | "agentforce";
 
-const MODE_FULL_LABELS: Record<McpMode, string> = {
-  local: "Custom MCP (stdio)",
-  hosted: "Salesforce Hosted MCP",
-  agentforce: "Salesforce Agentforce",
-};
-
 function McpModeToggle({
   mode,
   switching,
@@ -561,6 +566,121 @@ function McpModeToggle({
           {m === "agentforce" ? "Agentforce" : m.charAt(0).toUpperCase() + m.slice(1)}
         </button>
       ))}
+    </div>
+  );
+}
+
+
+function ResponsePathControl({
+  baseMode,
+  path,
+  onChange,
+}: {
+  baseMode: McpMode;
+  path: ResponsePath;
+  onChange: (path: ResponsePath) => void;
+}) {
+  if (baseMode === "agentforce") return null;
+
+  const normalizedPath = normalizeResponsePath(baseMode, path);
+  const selectable = getSelectableResponsePaths(baseMode);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+      <p
+        style={{
+          fontSize: "8px",
+          fontFamily: "var(--font-body)",
+          letterSpacing: "0.12em",
+          textTransform: "uppercase",
+          color: "var(--color-ink-soft)",
+        }}
+      >
+        Response path
+      </p>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }} role="group" aria-label="Response path">
+        {selectable.map((option) => {
+          const active = normalizedPath === option;
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onChange(option)}
+              aria-pressed={active}
+              title={getResponsePathDetail(baseMode, option)}
+              style={{
+                padding: "3px 7px",
+                border: active ? "0.5px solid var(--color-accent)" : "0.5px solid var(--color-border)",
+                borderRadius: "4px",
+                background: active ? "color-mix(in srgb, var(--color-accent) 9%, var(--color-surface))" : "transparent",
+                fontFamily: "var(--font-body)",
+                fontSize: "10px",
+                color: active ? "var(--color-ink)" : "var(--color-ink-soft)",
+                cursor: "pointer",
+                transition: "all 0.15s ease",
+              }}
+            >
+              {RESPONSE_PATH_LABELS[option]}
+            </button>
+          );
+        })}
+      </div>
+      <p
+        style={{
+          fontFamily: "var(--font-body)",
+          fontSize: "10px",
+          color: "var(--color-ink-soft)",
+          lineHeight: 1.35,
+        }}
+      >
+        {getNextResponseDescription(baseMode, normalizedPath)}
+      </p>
+    </div>
+  );
+}
+
+function ResponsePathFooter({
+  baseMode,
+  path,
+  modelUsed,
+  contextPrefetched,
+  contextSource,
+}: {
+  baseMode: McpMode;
+  path: ResponsePath;
+  modelUsed?: string;
+  contextPrefetched?: boolean;
+  contextSource?: "mcp" | "rest" | "none";
+}) {
+  let label: string;
+  const normalizedPath = normalizeResponsePath(baseMode, path);
+
+  if (normalizedPath === "agentforce-direct" || baseMode === "agentforce") {
+    label = "Answered directly by Agentforce";
+  } else if (normalizedPath === "trust-layer") {
+    const model = findModelByApiName(modelUsed ?? "")?.label ?? "Salesforce Models API";
+    label = `Answered by ${model} via the Einstein Trust Layer`;
+    if (contextSource === "mcp") label += " after MCP context collection";
+    else if (contextSource === "rest") label += " after Salesforce context prefetch";
+    else if (contextPrefetched) label += " after context collection";
+  } else {
+    const source = baseMode === "hosted" ? "Hosted MCP" : "Local MCP";
+    label = `Answered by Claude using ${source}`;
+  }
+
+  return (
+    <div
+      style={{
+        marginTop: "6px",
+        paddingTop: "6px",
+        borderTop: "0.5px solid var(--color-border)",
+        fontFamily: "var(--font-body)",
+        fontSize: "10px",
+        fontStyle: "italic",
+        color: "var(--color-ink-soft)",
+      }}
+    >
+      {label}
     </div>
   );
 }
@@ -809,8 +929,7 @@ export default function ChatPanel({
   const [activeAgentProfile, setActiveAgentProfile] = useState<AgentProfile | null>(null);
   const [agentProfiles, setAgentProfiles]           = useState<AgentProfile[]>([]);
   const [agentPickerOpen, setAgentPickerOpen]       = useState(false);
-  const [consultAgentforce, setConsultAgentforce]   = useState(false);
-  const [trustLayerMode, setTrustLayerMode]         = useState(false);
+  const [responsePath, setResponsePath]             = useState<ResponsePath>("default");
   const [showMcpPrompt, setShowMcpPrompt] = useState(false);
   const [panelWidthPct, setPanelWidthPct] = useState(DEFAULT_WIDTH_PCT);
   const [collapsed, setCollapsed]         = useState(false);
@@ -829,6 +948,7 @@ export default function ChatPanel({
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLInputElement>(null);
+  const effectiveResponsePath = normalizeResponsePath(mcpMode, responsePath);
 
   // Load prompts from localStorage after hydration to avoid server/client mismatch
   useEffect(() => {
@@ -968,6 +1088,10 @@ export default function ChatPanel({
     try { localStorage.setItem(LS_PROVIDER_KEY, mcpMode); } catch {}
   }, [mcpMode]);
 
+  useEffect(() => {
+    setResponsePath((current) => normalizeResponsePath(mcpMode, current));
+  }, [mcpMode]);
+
   // Persist width when not collapsed
   useEffect(() => {
     if (!collapsed) {
@@ -1065,6 +1189,7 @@ export default function ChatPanel({
       });
       if (res.ok) {
         setMcpMode(newMode);
+        setResponsePath((current) => normalizeResponsePath(newMode, current));
         setMessages([]);
         setSessionExpired(false);
         setShowMcpPrompt(false);
@@ -1075,7 +1200,10 @@ export default function ChatPanel({
     }
   }, [mcpMode, mcpSwitching, hasMcpToken]);
 
-  const sendAgentforce = useCallback(async (trimmed: string) => {
+  const sendAgentforce = useCallback(async (
+    trimmed: string,
+    route?: { baseMode: McpMode; path: ResponsePath },
+  ) => {
     try {
       const res = await fetch("/api/agent", {
         method: "POST",
@@ -1097,6 +1225,8 @@ export default function ChatPanel({
         choiceResolved: false,
         results: data.results,
         summaries: data.summaries,
+        responseBaseMode: route?.baseMode ?? "agentforce",
+        responsePath: route?.path ?? "default",
       }]);
     } catch (err) {
       setMessages((prev) => [...prev, {
@@ -1137,6 +1267,8 @@ export default function ChatPanel({
         choiceResolved: false,
         results: data.results,
         summaries: data.summaries,
+        responseBaseMode: parentMessage.responseBaseMode ?? "agentforce",
+        responsePath: parentMessage.responsePath ?? "default",
       }]);
     } catch (err) {
       setMessages((prev) => [...prev, {
@@ -1177,31 +1309,29 @@ export default function ChatPanel({
       setInput("");
       setLoading(true);
       setStreaming("");
-      setStatus(mcpMode === "agentforce" ? "Agentforce is working…" : null);
+      setStatus(mcpMode === "agentforce" || effectiveResponsePath === "agentforce-direct" ? "Agentforce is working…" : null);
       setActiveIndicators([]);
       pendingWriteRef.current = null;
 
-      if (mcpMode === "agentforce") {
-        await sendAgentforce(trimmed);
+      if (mcpMode === "agentforce" || effectiveResponsePath === "agentforce-direct") {
+        await sendAgentforce(trimmed, {
+          baseMode: mcpMode,
+          path: mcpMode === "agentforce" ? "default" : "agentforce-direct",
+        });
         return;
       }
 
       const outgoingMessages = [...messagesRef.current, userMsg];
 
       // Trust Layer mode: non-streaming JSON response
-      if (trustLayerMode) {
+      if (effectiveResponsePath === "trust-layer") {
         try {
           const res = await fetch("/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ messages: outgoingMessages, accountContext: accountContextRef.current, trustLayerMode: true }),
           });
-          const data = await res.json() as { text?: string; modelUsed?: string; error?: string; contextPrefetched?: boolean };
-          console.log('[ChatPanel] === RECEIVED RESPONSE ===');
-          console.log('Full data:', JSON.stringify(data, null, 2));
-          console.log('Text field:', data.text);
-          console.log('trustLayerMode:', true);
-          console.log('[ChatPanel] === END RECEIVED ===');
+          const data = await res.json() as { text?: string; modelUsed?: string; error?: string; contextPrefetched?: boolean; contextSource?: "mcp" | "rest" | "none" };
           if (!res.ok || data.error) {
             if (res.status === 401 || data.error === "SF_SESSION_EXPIRED") {
               setSessionExpired(true);
@@ -1215,6 +1345,9 @@ export default function ChatPanel({
               trustLayerMode: true,
               modelUsed: data.modelUsed,
               contextPrefetched: data.contextPrefetched,
+              contextSource: data.contextSource,
+              responseBaseMode: mcpMode,
+              responsePath: "trust-layer",
             }]);
           }
         } catch (err) {
@@ -1231,7 +1364,7 @@ export default function ChatPanel({
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: outgoingMessages, accountContext: accountContextRef.current, consultAgentforce, conversationId: conversationIdRef.current }),
+          body: JSON.stringify({ messages: outgoingMessages, accountContext: accountContextRef.current, conversationId: conversationIdRef.current }),
         });
         if (res.status === 401 && !retried) {
           const refreshRes = await fetch("/api/auth/refresh", { method: "POST" });
@@ -1323,6 +1456,8 @@ export default function ChatPanel({
                 followUps: followUps.length > 0 ? followUps : undefined,
                 consultedAgentforce: event.consultedAgentforce || undefined,
                 summaryAgentUsed: event.summaryAgentUsed || undefined,
+                responseBaseMode: mcpMode,
+                responsePath: "default",
               },
             ]);
             // Forward render directive to parent (account detail page)
@@ -1358,7 +1493,7 @@ export default function ChatPanel({
         setLoading(false);
       }
     },
-    [loading, mcpMode, trustLayerMode, sendAgentforce, onRender]
+    [loading, mcpMode, effectiveResponsePath, sendAgentforce, onRender]
   );
 
   const handleRecordingChange = useCallback((recording: boolean) => {
@@ -1562,65 +1697,12 @@ export default function ChatPanel({
               />
             )}
 
-            {/* Row 2c: Consult Agentforce + Trust Layer toggles (Local and Hosted only) */}
-            {mcpMode !== "agentforce" && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                <button
-                  type="button"
-                  onClick={() => setConsultAgentforce((v) => !v)}
-                  aria-pressed={consultAgentforce}
-                  title="When on, Claude can consult Agentforce for specialized knowledge"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    padding: "3px 10px",
-                    border: consultAgentforce
-                      ? "1px solid rgba(30, 64, 175, 0.30)"
-                      : "1px solid var(--color-border)",
-                    borderRadius: "14px",
-                    background: consultAgentforce
-                      ? "rgba(30, 64, 175, 0.10)"
-                      : "transparent",
-                    fontFamily: "var(--font-body)",
-                    fontSize: "11px",
-                    color: consultAgentforce ? "#1E40AF" : "var(--color-ink-soft)",
-                    cursor: "pointer",
-                    transition: "all 0.15s ease",
-                  }}
-                >
-                  <span style={{ color: consultAgentforce ? "#1E40AF" : "var(--color-ink-muted)", fontSize: "11px" }}>✦</span>
-                  <span>{consultAgentforce ? "Agentforce active" : "Consult Agentforce"}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTrustLayerMode((v) => !v)}
-                  aria-pressed={trustLayerMode}
-                  title="Route chat through Salesforce Einstein Trust Layer (PII masking, audit logging)"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    padding: "3px 10px",
-                    border: trustLayerMode
-                      ? "1px solid rgba(45, 106, 79, 0.35)"
-                      : "1px solid var(--color-border)",
-                    borderRadius: "14px",
-                    background: trustLayerMode
-                      ? "rgba(45, 106, 79, 0.10)"
-                      : "transparent",
-                    fontFamily: "var(--font-body)",
-                    fontSize: "11px",
-                    color: trustLayerMode ? "#2D6A4F" : "var(--color-ink-soft)",
-                    cursor: "pointer",
-                    transition: "all 0.15s ease",
-                  }}
-                >
-                  <span style={{ fontSize: "11px" }}>🛡️</span>
-                  <span>{trustLayerMode ? "Trust Layer on" : "Trust Layer"}</span>
-                </button>
-              </div>
-            )}
+            {/* Row 2c: response path selector (Local and Hosted only) */}
+            <ResponsePathControl
+              baseMode={mcpMode}
+              path={effectiveResponsePath}
+              onChange={setResponsePath}
+            />
 
             {/* Row 3: context pill */}
             <div
@@ -1692,9 +1774,7 @@ export default function ChatPanel({
                   className="text-center mb-5"
                   style={{ fontSize: "11px", fontFamily: "var(--font-body)", color: "var(--color-ink-soft)" }}
                 >
-                  {mcpMode === "agentforce"
-                    ? "Running via Salesforce Agentforce."
-                    : MODE_FULL_LABELS[mcpMode]}
+                  {getNextResponseDescription(mcpMode, effectiveResponsePath).replace("Next response: ", "")}
                 </p>
                 <div className="flex flex-wrap justify-center gap-1.5">
                   {suggestedPrompts.map(({ label, prompt }) => (
@@ -1806,26 +1886,14 @@ export default function ChatPanel({
                           Consulted Account Summary Agent
                         </div>
                       )}
-                      {m.trustLayerMode && (
-                        <div
-                          style={{
-                            marginTop: "6px",
-                            paddingTop: "6px",
-                            borderTop: "0.5px solid var(--color-border)",
-                            fontFamily: "var(--font-body)",
-                            fontSize: "10px",
-                            fontStyle: "italic",
-                            color: "var(--color-ink-soft)",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "4px",
-                          }}
-                        >
-                          <span style={{ fontSize: "10px" }}>🛡️</span>
-                          {findModelByApiName(m.modelUsed ?? "")?.label ?? "Salesforce Models API"}
-                          {m.contextPrefetched && " · Account context loaded"}
-                          {" via the Einstein Trust Layer"}
-                        </div>
+                      {m.responseBaseMode && m.responsePath && (
+                        <ResponsePathFooter
+                          baseMode={m.responseBaseMode}
+                          path={m.responsePath}
+                          modelUsed={m.modelUsed}
+                          contextPrefetched={m.contextPrefetched}
+                          contextSource={m.contextSource}
+                        />
                       )}
                     </>
                   ) : (

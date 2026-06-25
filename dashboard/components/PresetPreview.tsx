@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import type { DemoPack } from "@/lib/demoPacks";
 import { deriveAccentTextColor } from "@/lib/brandColors";
 
@@ -12,6 +13,7 @@ export default function PresetPreview({ preset, size = "mini" }: PresetPreviewPr
   const { palette, typography, appName, logoDataUrl } = preset;
   const isMini = size === "mini";
   const scale = isMini ? 1 : 2.2;
+  const logoSize = Math.round(6 * scale);
 
   const accentText = deriveAccentTextColor(palette.accent, palette.paper);
 
@@ -146,7 +148,7 @@ export default function PresetPreview({ preset, size = "mini" }: PresetPreviewPr
       <div style={headerBar}>
         <div style={logoBox}>
           {logoDataUrl ? (
-            <img src={logoDataUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+            <Image src={logoDataUrl} alt="" width={logoSize} height={logoSize} unoptimized style={{ width: "100%", height: "100%", objectFit: "contain" }} />
           ) : (
             <svg viewBox="0 0 24 24" fill="none" style={{ width: "70%", height: "70%", opacity: 0.5 }}>
               <path d="M3 16.5a6 6 0 0 1 7-5.88A7 7 0 1 1 17 19H5a2 2 0 0 1-2-2.5Z" fill={palette.headerFg} />

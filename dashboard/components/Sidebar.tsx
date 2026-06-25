@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import NotificationBell from "./NotificationBell";
@@ -97,7 +98,7 @@ export default function Sidebar({ displayName, instanceUrl, appName, logoBase64,
           style={{ background: logoBoxBg }}
         >
           {logoBase64 ? (
-            <img src={logoBase64} alt={label} className="w-6 h-6 object-contain" />
+            <Image src={logoBase64} alt={label} width={24} height={24} unoptimized className="object-contain" />
           ) : (
             <svg className="w-4 h-4" style={{ color: logoIconCol }} fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2Zm0 3a7 7 0 1 1 0 14A7 7 0 0 1 12 5Zm-1 4v4.586l-2.293 2.293 1.414 1.414L13 14.414V9h-2Z" />

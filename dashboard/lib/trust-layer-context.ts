@@ -31,6 +31,10 @@ export type PrefetchedAccountContext = {
   casesSummary: string;
 };
 
+type SFAccountWithOwner = SFAccount & {
+  Owner?: { Name?: string | null } | null;
+};
+
 export async function prefetchAccountContext(
   accountId: string,
   accessToken: string,
@@ -67,7 +71,8 @@ function formatAccountSummary(account: SFAccount | null): string {
   if (account.Website) lines.push(`Website: ${account.Website}`);
   const location = [account.BillingCity, account.BillingState].filter(Boolean).join(", ");
   if (location) lines.push(`Location: ${location}`);
-  if (account.Owner?.Name) lines.push(`Relationship Manager: ${account.Owner.Name}`);
+  const ownerName = (account as SFAccountWithOwner).Owner?.Name;
+  if (ownerName) lines.push(`Relationship Manager: ${ownerName}`);
   if (account.Description) lines.push(`Description: ${truncate(account.Description, 300)}`);
   return lines.join("\n");
 }

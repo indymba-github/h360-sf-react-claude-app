@@ -10,7 +10,6 @@ import { migratePalette } from "@/lib/demoPacks";
 function applyStoredSettings() {
   try {
     const s = JSON.parse(localStorage.getItem("settings") ?? "{}") as Record<string, string>;
-
     if (s.accentColor) {
       const legacyInk = s.inkColor ?? "#1B1F2A";
       // applyBrandTokens is theme-aware — it reads data-theme and handles
