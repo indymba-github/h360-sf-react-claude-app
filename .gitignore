@@ -9,6 +9,7 @@
 .env
 .env.local
 .env.*.local
+.env copy.local
 
 # OS
 .DS_Store

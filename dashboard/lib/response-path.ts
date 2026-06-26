@@ -5,7 +5,7 @@ export type ResponsePath = "default" | "agentforce-direct" | "trust-layer";
 export const RESPONSE_PATHS: ResponsePath[] = ["default", "agentforce-direct", "trust-layer"];
 
 export const RESPONSE_PATH_LABELS: Record<ResponsePath, string> = {
-  default: "Default",
+  default: "MCP answer",
   "agentforce-direct": "Agentforce direct",
   "trust-layer": "Trust Layer",
 };
@@ -56,4 +56,44 @@ export function getResponsePathDetail(baseMode: BaseMode, path: ResponsePath): s
   }
 
   return `${BASE_MODE_LABELS[baseMode]} provides Salesforce context to Claude.`;
+}
+
+export type ContextSource = "mcp" | "rest" | "none";
+
+export interface RouteReceiptOptions {
+  baseMode: BaseMode;
+  path: ResponsePath;
+  modelLabel?: string;
+  contextSource?: ContextSource;
+  contextPrefetched?: boolean;
+}
+
+export function getRouteReceiptText({
+  baseMode,
+  path,
+  modelLabel,
+  contextSource,
+  contextPrefetched,
+}: RouteReceiptOptions): string {
+  const normalized = normalizeResponsePath(baseMode, path);
+
+  if (normalized === "agentforce-direct" || baseMode === "agentforce") {
+    return "Agentforce answered directly";
+  }
+
+  if (normalized === "trust-layer") {
+    const model = modelLabel ?? "Salesforce Models API";
+
+    if (contextSource === "rest") {
+      return `Salesforce REST prefetch gathered context -> ${model} answered through the Trust Layer`;
+    }
+
+    if (contextSource === "none" && !contextPrefetched) {
+      return `${model} answered through the Trust Layer`;
+    }
+
+    return `${BASE_MODE_LABELS[baseMode]} gathered context -> ${model} answered through the Trust Layer`;
+  }
+
+  return `${BASE_MODE_LABELS[baseMode]} gathered context -> Claude answered`;
 }

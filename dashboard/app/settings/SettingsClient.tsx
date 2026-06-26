@@ -3,17 +3,28 @@
 import { useState, useEffect, useRef, useCallback, type DragEvent } from "react";
 import Image from "next/image";
 import SectionHeader from "@/components/SectionHeader";
-import PresetPreview from "@/components/PresetPreview";
+import BrandFromWebsiteSection from "@/components/settings/BrandFromWebsiteSection";
+import PresetEditPanel from "@/components/settings/PresetEditPanel";
+import PresetLibraryPanel from "@/components/settings/PresetLibraryPanel";
 import { getPresets, savePresets, restoreSeeded, newPresetId, type DemoPack } from "@/lib/demoPacks";
-import { applyBrandTokens, applyAccentTokens } from "@/lib/brandColors";
-import { migratePalette } from "@/lib/demoPacks";
+import { BODY_FONT_OPTIONS, DISPLAY_FONT_OPTIONS } from "@/lib/branding-options";
+import { buildBlankPreset, duplicatePreset } from "@/lib/preset-library";
 import {
   buildBrandSettingsPatch,
-  buildPresetFromBrandResult,
-  buildServerSettingsPayload,
-  paletteFromBrandResult,
+  buildPresetSettingsPatch,
+  upsertBrandPreset,
   type ExtractedBrandResult,
 } from "@/lib/brand-settings";
+import {
+  applyBrandingSettings,
+  applyStoredBrandingSettings,
+  loadGoogleFont,
+  notifyBrandingChanged,
+  persistBrandingSettings,
+  postBrandingSettings,
+  readStoredSettings as readSettings,
+  writeStoredSettings as writeSettings,
+} from "@/lib/branding-client";
 import { getProvidersConfig, setDefaultProvider, PROVIDER_LABELS, type Provider } from "@/lib/providers";
 import { getAgentProfiles, saveAgentProfiles, getActiveAgentProfile, setActiveAgentProfile, isValidAgentId, type AgentProfile } from "@/lib/agents";
 import ModelPicker from "@/components/ModelPicker";
@@ -21,32 +32,7 @@ import { SF_MODELS_DEFAULT_API_NAME } from "@/lib/salesforce-models-catalog";
 
 // ── localStorage helpers ───────────────────────────────────────────────────
 
-const LS_SETTINGS = "settings";
-const LS_PROMPTS  = "prompts.library";
-
-interface StoredSettings {
-  accentColor?: string;
-  paperColor?: string;
-  inkColor?: string;       // legacy — still read for migration
-  textColor?: string;      // body text color (new)
-  headerBgColor?: string;  // header background (new)
-  headerFgColor?: string;  // header text color (new)
-  displayFont?: string;
-  bodyFont?: string;
-  appName?: string;
-  logoBase64?: string | null;
-  trustLayerModel?: string; // SF Models API name for Trust Layer mode
-}
-
-function readSettings(): StoredSettings {
-  try { return JSON.parse(localStorage.getItem(LS_SETTINGS) ?? "{}") as StoredSettings; }
-  catch { return {}; }
-}
-
-function writeSettings(patch: Partial<StoredSettings>) {
-  const prev = readSettings();
-  localStorage.setItem(LS_SETTINGS, JSON.stringify({ ...prev, ...patch }));
-}
+const LS_PROMPTS = "prompts.library";
 
 // ── Defaults ───────────────────────────────────────────────────────────────
 
@@ -59,21 +45,6 @@ const DEFAULT_INK       = "#1B1F2A";  // legacy alias
 const DEFAULT_APP_NAME     = "Cumulus Bank";
 const DEFAULT_DISPLAY_FONT = "Source Serif 4";
 const DEFAULT_BODY_FONT    = "Inter";
-
-const DISPLAY_FONT_OPTIONS = [
-  { value: "Source Serif 4", label: "Source Serif 4 (default)" },
-  { value: "Fraunces",       label: "Fraunces" },
-  { value: "EB Garamond",    label: "EB Garamond" },
-  { value: "Spectral",       label: "Spectral" },
-  { value: "Crimson Pro",    label: "Crimson Pro" },
-];
-
-const BODY_FONT_OPTIONS = [
-  { value: "Inter",          label: "Inter (default)" },
-  { value: "IBM Plex Sans",  label: "IBM Plex Sans" },
-  { value: "DM Sans",        label: "DM Sans" },
-  { value: "system-ui",      label: "System UI" },
-];
 
 // ── Prompt library types ───────────────────────────────────────────────────
 
@@ -216,61 +187,7 @@ function ColorSwatch({ label, value, onChange }: { label: string; value: string;
 
 type BrandResult = ExtractedBrandResult;
 
-function BrandPreviewCard({ result, onApply, onSavePreset }: { result: BrandResult; onApply: () => void; onSavePreset: () => void }) {
-  return (
-    <div className="p-4 space-y-3" style={{ background: "var(--color-paper)", border: "0.5px solid var(--color-border)", marginTop: 4 }}>
-      {result.companyName && (
-        <p style={{ fontFamily: "var(--font-display)", fontSize: "13px", fontWeight: 500, color: "var(--color-ink)" }}>
-          {result.companyName}
-        </p>
-      )}
-      <div className="flex gap-2 flex-wrap">
-        {result.colors.all.slice(0, 6).map((c, i) => (
-          <div
-            key={i}
-            title={c}
-            style={{ width: 24, height: 24, background: c, border: "0.5px solid var(--color-border)" }}
-          />
-        ))}
-      </div>
-      {(result.fonts.heading || result.fonts.body) && (
-        <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-muted)" }}>
-          {[result.fonts.heading, result.fonts.body].filter(Boolean).join(" · ")}
-        </p>
-      )}
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={onApply}
-          className="px-4 py-1.5 text-xs font-medium transition-opacity hover:opacity-80"
-          style={{ background: "var(--color-accent)", color: "var(--color-accent-foreground)", fontFamily: "var(--font-body)", fontSize: "11px" }}
-        >
-          Apply to settings
-        </button>
-        <button
-          onClick={onSavePreset}
-          className="px-4 py-1.5 text-xs font-medium transition-opacity hover:opacity-80"
-          style={{ background: "var(--color-paper)", color: "var(--color-ink-muted)", border: "0.5px solid var(--color-border)", fontFamily: "var(--font-body)", fontSize: "11px" }}
-        >
-          Save as preset
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ── Font loader ────────────────────────────────────────────────────────────
-
-function loadGoogleFont(fontName: string) {
-  if (fontName === "system-ui" || fontName === "Inter") return;
-  const family = fontName.replace(/ /g, "+");
-  const id = `gf-${family}`;
-  if (document.getElementById(id)) return;
-  const link = document.createElement("link");
-  link.id = id;
-  link.rel = "stylesheet";
-  link.href = `https://fonts.googleapis.com/css2?family=${family}:ital,wght@0,400;0,500;1,400&display=swap`;
-  document.head.appendChild(link);
-}
 
 // ── 00 Profile section ─────────────────────────────────────────────────────
 
@@ -281,77 +198,6 @@ function ProfileSection({ displayName }: { displayName: string | null }) {
         <FieldLabel>Full name</FieldLabel>
         <TextInput value={displayName ?? ""} readOnly />
       </div>
-    </SectionCard>
-  );
-}
-
-// ── 02 Brand from website section ─────────────────────────────────────────
-
-function BrandFromWebsiteSection({ onApply, onSavePreset }: { onApply: (result: BrandResult) => void; onSavePreset: (result: BrandResult, sourceUrl: string) => DemoPack }) {
-  const [url, setUrl]           = useState("");
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState<string | null>(null);
-  const [result, setResult]     = useState<BrandResult | null>(null);
-  const [savedMsg, setSavedMsg] = useState<string | null>(null);
-
-  async function handleExtract() {
-    const trimmed = url.trim();
-    if (!trimmed) return;
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    setSavedMsg(null);
-    try {
-      const res = await fetch("/api/settings/extract-brand", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trimmed }),
-      });
-      const data = await res.json() as BrandResult & { error?: string };
-      if (!res.ok || data.error) throw new Error(data.error ?? "Extraction failed");
-      setResult(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Extraction failed");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function handleSavePreset() {
-    if (!result) return;
-    const preset = onSavePreset(result, url.trim());
-    setSavedMsg(`Saved "${preset.label}" to presets.`);
-  }
-
-  return (
-    <SectionCard>
-      <HelpText>
-        Paste your company&rsquo;s website URL and we&rsquo;ll extract brand colors and fonts automatically using AI.
-      </HelpText>
-      <div className="flex gap-2">
-        <TextInput
-          value={url}
-          onChange={setUrl}
-          placeholder="https://acme.com"
-        />
-        <button
-          onClick={handleExtract}
-          disabled={loading || !url.trim()}
-          className="shrink-0 px-4 py-2 text-xs font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
-          style={{ background: "var(--color-ink)", color: "var(--color-paper)", fontFamily: "var(--font-body)", fontSize: "11px", whiteSpace: "nowrap" }}
-        >
-          {loading ? "Extracting…" : "Extract"}
-        </button>
-      </div>
-      {error && (
-        <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-danger)" }}>{error}</p>
-      )}
-      {result && (
-        <BrandPreviewCard result={result} onApply={() => onApply(result)} onSavePreset={handleSavePreset} />
-      )}
-      {savedMsg && (
-        <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-success)" }}>{savedMsg}</p>
-      )}
     </SectionCard>
   );
 }
@@ -376,38 +222,41 @@ function PaletteSection() {
     if (s.headerFgColor) setHeaderFgState(s.headerFgColor);
   }, []);
 
-  function applyAll(a: string, p: string, t: string, hBg: string, hFg: string) {
-    applyBrandTokens(a, { accent: a, paper: p, text: t, headerBg: hBg, headerFg: hFg });
+  function isValidHex(value: string) {
+    return /^#[0-9a-fA-F]{6}$/.test(value);
+  }
+
+  function updatePalette(patch: Parameters<typeof persistBrandingSettings>[0], applyLive: boolean) {
+    void persistBrandingSettings(patch, {
+      applyLive,
+      persistServer: false,
+      brandingEvent: "none",
+    });
   }
 
   function setAccent(v: string) {
     setAccentState(v);
-    writeSettings({ accentColor: v });
-    if (/^#[0-9a-fA-F]{6}$/.test(v)) applyAll(v, paper, text, headerBg, headerFg);
+    updatePalette({ accentColor: v }, isValidHex(v));
   }
 
   function setPaper(v: string) {
     setPaperState(v);
-    writeSettings({ paperColor: v });
-    if (/^#[0-9a-fA-F]{6}$/.test(v)) applyAll(accent, v, text, headerBg, headerFg);
+    updatePalette({ paperColor: v }, isValidHex(v));
   }
 
   function setText(v: string) {
     setTextState(v);
-    writeSettings({ textColor: v });
-    if (/^#[0-9a-fA-F]{6}$/.test(v)) applyAll(accent, paper, v, headerBg, headerFg);
+    updatePalette({ textColor: v }, isValidHex(v));
   }
 
   function setHeaderBg(v: string) {
     setHeaderBgState(v);
-    writeSettings({ headerBgColor: v });
-    if (/^#[0-9a-fA-F]{6}$/.test(v)) applyAll(accent, paper, text, v, headerFg);
+    updatePalette({ headerBgColor: v }, isValidHex(v));
   }
 
   function setHeaderFg(v: string) {
     setHeaderFgState(v);
-    writeSettings({ headerFgColor: v });
-    if (/^#[0-9a-fA-F]{6}$/.test(v)) applyAll(accent, paper, text, headerBg, v);
+    updatePalette({ headerFgColor: v }, isValidHex(v));
   }
 
   function reset() {
@@ -416,12 +265,12 @@ function PaletteSection() {
     setTextState(DEFAULT_TEXT);
     setHeaderBgState(DEFAULT_HEADER_BG);
     setHeaderFgState(DEFAULT_HEADER_FG);
-    writeSettings({
+    updatePalette({
       accentColor: DEFAULT_ACCENT, paperColor: DEFAULT_PAPER,
       textColor: DEFAULT_TEXT, headerBgColor: DEFAULT_HEADER_BG,
       headerFgColor: DEFAULT_HEADER_FG,
-    });
-    applyAll(DEFAULT_ACCENT, DEFAULT_PAPER, DEFAULT_TEXT, DEFAULT_HEADER_BG, DEFAULT_HEADER_FG);
+      inkColor: DEFAULT_INK,
+    }, true);
   }
 
   return (
@@ -466,20 +315,8 @@ function ThemeSection() {
       (v === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
 
-    // Reapply brand tokens now that data-theme has changed — applyBrandTokens
-    // is theme-aware and will set/clear surface vars correctly for the new mode
-    const s = readSettings();
-    if (s.accentColor) {
-      const legacyInk = s.inkColor ?? DEFAULT_INK;
-      applyBrandTokens(s.accentColor, migratePalette({
-        accent:   s.accentColor,
-        paper:    s.paperColor    ?? DEFAULT_PAPER,
-        text:     s.textColor     ?? legacyInk,
-        headerBg: s.headerBgColor ?? legacyInk,
-        headerFg: s.headerFgColor ?? (s.paperColor ?? DEFAULT_PAPER),
-      }));
-    }
-    window.dispatchEvent(new CustomEvent("theme-changed"));
+    applyBrandingSettings(readSettings());
+    notifyBrandingChanged({ brandingEvent: "none", themeChanged: true });
   }
 
   const options: { value: ThemePreference; label: string }[] = [
@@ -540,19 +377,13 @@ function TypographySection() {
 
   function setDisplay(v: string) {
     setDisplayState(v);
-    writeSettings({ displayFont: v });
-    loadGoogleFont(v);
-    const family = v === "system-ui" ? "system-ui, sans-serif" : `'${v}', serif`;
-    document.documentElement.style.setProperty("--font-display", family);
+    void persistBrandingSettings({ displayFont: v }, { persistServer: false, brandingEvent: "none" });
     setPreviewText((prev) => ({ ...prev, display: v }));
   }
 
   function setBody(v: string) {
     setBodyState(v);
-    writeSettings({ bodyFont: v });
-    loadGoogleFont(v);
-    const family = v === "system-ui" ? "system-ui, sans-serif" : `'${v}', sans-serif`;
-    document.documentElement.style.setProperty("--font-body", family);
+    void persistBrandingSettings({ bodyFont: v }, { persistServer: false, brandingEvent: "none" });
     setPreviewText((prev) => ({ ...prev, body: v }));
   }
 
@@ -859,39 +690,26 @@ function BrandingSection() {
     reader.onload = () => {
       const b64 = reader.result as string;
       setLogoState(b64);
-      writeSettings({ logoBase64: b64 });
-      // Also persist to server so HeaderBar picks it up on next nav
-      void fetch("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ logoBase64: b64 }),
-      });
-      setSaveMsg(null);
+      void persistBrandingSettings({ logoBase64: b64 }, { themeChanged: false })
+        .then(({ serverSaved }) => setSaveMsg(serverSaved ? null : "Saved locally. Server sync failed."));
     };
     reader.readAsDataURL(file);
   }
 
-  function saveName() {
+  async function saveName() {
     const trimmed = appName.trim() || DEFAULT_APP_NAME;
     setAppNameState(trimmed);
-    writeSettings({ appName: trimmed });
-    // Persist to server so HeaderBar gets it
-    void fetch("/api/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ appName: trimmed }),
-    }).then(() => setSaveMsg("Saved. Reload to see changes in the header."));
+    const { serverSaved } = await persistBrandingSettings({ appName: trimmed }, { themeChanged: false });
+    setSaveMsg(serverSaved ? "Saved." : "Saved locally. Server sync failed.");
   }
 
   function removeLogo() {
     setLogoState(null);
-    writeSettings({ logoBase64: null });
     if (fileRef.current) fileRef.current.value = "";
-    void fetch("/api/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ logoBase64: null }),
-    });
+    void persistBrandingSettings({ logoBase64: null }, { themeChanged: false })
+      .then(({ serverSaved }) => {
+        if (!serverSaved) setSaveMsg("Removed locally. Server sync failed.");
+      });
   }
 
   return (
@@ -1443,338 +1261,6 @@ function AiProviderSection() {
 
 type PresetView = "grid" | "edit";
 
-function KebabMenu({ onEdit, onDuplicate, onDelete, isSeeded }: {
-  onEdit: () => void;
-  onDuplicate: () => void;
-  onDelete: () => void;
-  isSeeded: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function close(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-
-  return (
-    <div ref={ref} style={{ position: "relative" }}>
-      <button
-        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
-        style={{
-          width: 22, height: 22,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          background: "transparent", border: "none", cursor: "pointer",
-          color: "var(--color-ink-soft)",
-          borderRadius: 2,
-        }}
-        title="Options"
-      >
-        <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor">
-          <circle cx="12" cy="5"  r="1.5" />
-          <circle cx="12" cy="12" r="1.5" />
-          <circle cx="12" cy="19" r="1.5" />
-        </svg>
-      </button>
-      {open && (
-        <div
-          style={{
-            position: "absolute", right: 0, top: "100%", zIndex: 50,
-            background: "var(--color-surface)",
-            border: "0.5px solid var(--color-border)",
-            minWidth: 110,
-            boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-          }}
-        >
-          {[
-            { label: "Edit", action: onEdit },
-            { label: "Duplicate", action: onDuplicate },
-            ...(!isSeeded ? [{ label: "Delete", action: onDelete, danger: true }] : []),
-          ].map(({ label, action, danger }) => (
-            <button
-              key={label}
-              onClick={(e) => { e.stopPropagation(); action(); setOpen(false); }}
-              style={{
-                display: "block", width: "100%", textAlign: "left",
-                padding: "7px 12px",
-                fontFamily: "var(--font-body)", fontSize: "12px",
-                color: danger ? "var(--color-danger)" : "var(--color-ink)",
-                background: "transparent", border: "none", cursor: "pointer",
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--color-paper)"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PresetEditPanel({
-  preset,
-  onSave,
-  onCancel,
-}: {
-  preset: DemoPack;
-  onSave: (updated: DemoPack) => void;
-  onCancel: () => void;
-}) {
-  const [draft, setDraft] = useState<DemoPack>({ ...preset });
-  const [logoMode, setLogoMode] = useState<"idle" | "url">("idle");
-  const [logoUrlInput, setLogoUrlInput] = useState("");
-  const [logoUrlError, setLogoUrlError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  function set<K extends keyof DemoPack>(key: K, val: DemoPack[K]) {
-    setDraft((p) => ({ ...p, [key]: val }));
-  }
-
-  function setPalette(key: keyof DemoPack["palette"], val: string) {
-    setDraft((p) => ({ ...p, palette: { ...p.palette, [key]: val } }));
-  }
-
-  function setTypo(key: keyof DemoPack["typography"], val: string) {
-    setDraft((p) => ({ ...p, typography: { ...p.typography, [key]: val } }));
-  }
-
-  function handleLogoFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 200 * 1024) { setLogoUrlError("Logo must be 200 KB or smaller."); return; }
-    setLogoUrlError(null);
-    const reader = new FileReader();
-    reader.onload = () => { set("logoDataUrl", reader.result as string); };
-    reader.readAsDataURL(file);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  }
-
-  function handleLogoUrl() {
-    const url = logoUrlInput.trim();
-    if (!url.startsWith("https://")) { setLogoUrlError("URL must start with https://"); return; }
-    setLogoUrlError(null);
-    set("logoDataUrl", url);
-    setLogoMode("idle");
-    setLogoUrlInput("");
-  }
-
-  function removeLogo() {
-    set("logoDataUrl", null);
-    setLogoMode("idle");
-    setLogoUrlInput("");
-    setLogoUrlError(null);
-  }
-
-  function logoCaption(): string {
-    const url = draft.logoDataUrl;
-    if (!url) return "";
-    if (url.startsWith("data:")) {
-      const bytes = Math.round((url.length * 3) / 4 / 1024);
-      return `Custom upload, ${bytes} KB`;
-    }
-    if (url.startsWith("/")) return url.split("/").pop() ?? url;
-    return "Loaded from URL";
-  }
-
-  const inputStyle: React.CSSProperties = {
-    width: "100%", padding: "5px 8px", fontSize: "12px",
-    fontFamily: "var(--font-body)", background: "var(--color-paper)",
-    border: "0.5px solid var(--color-border)", color: "var(--color-ink)", outline: "none",
-  };
-
-  const selectStyle: React.CSSProperties = { ...inputStyle };
-
-  return (
-    <div className="p-5 space-y-5" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
-      <div className="grid gap-5" style={{ gridTemplateColumns: "264px 1fr" }}>
-        {/* Live large preview */}
-        <div>
-          <FieldLabel>Preview</FieldLabel>
-          <PresetPreview preset={draft} size="large" />
-        </div>
-
-        {/* Fields */}
-        <div className="space-y-4">
-          <div>
-            <FieldLabel>Label</FieldLabel>
-            <input style={inputStyle} value={draft.label} maxLength={30} onChange={(e) => set("label", e.target.value)} />
-          </div>
-          <div>
-            <FieldLabel>App name</FieldLabel>
-            <input style={inputStyle} value={draft.appName} maxLength={30} onChange={(e) => set("appName", e.target.value)} />
-          </div>
-          <div>
-            <FieldLabel>Description</FieldLabel>
-            <input style={inputStyle} value={draft.description} maxLength={80} onChange={(e) => set("description", e.target.value)} />
-          </div>
-
-          {/* Logo section */}
-          <div>
-            <FieldLabel>Logo</FieldLabel>
-            <div className="flex gap-2 mb-2">
-              <label
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 4,
-                  padding: "4px 10px", cursor: "pointer",
-                  fontFamily: "var(--font-body)", fontSize: "11px",
-                  color: "var(--color-ink-muted)",
-                  background: "var(--color-paper)",
-                  border: "0.5px solid var(--color-border)",
-                }}
-              >
-                <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 0 1-6.364-6.364l10.94-10.94A3 3 0 1 1 19.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 0 0 2.112 2.13" />
-                </svg>
-                Upload file
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/svg+xml"
-                  className="sr-only"
-                  onChange={handleLogoFile}
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() => setLogoMode((m) => m === "url" ? "idle" : "url")}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 4,
-                  padding: "4px 10px", cursor: "pointer",
-                  fontFamily: "var(--font-body)", fontSize: "11px",
-                  color: logoMode === "url" ? "var(--color-accent-text)" : "var(--color-ink-muted)",
-                  background: "var(--color-paper)",
-                  border: logoMode === "url" ? "0.5px solid var(--color-accent)" : "0.5px solid var(--color-border)",
-                }}
-              >
-                <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
-                </svg>
-                Paste URL
-              </button>
-            </div>
-
-            {logoMode === "url" && (
-              <div className="flex gap-2 mb-2">
-                <input
-                  type="text"
-                  value={logoUrlInput}
-                  onChange={(e) => { setLogoUrlInput(e.target.value); setLogoUrlError(null); }}
-                  placeholder="https://example.com/logo.svg"
-                  onKeyDown={(e) => { if (e.key === "Enter") handleLogoUrl(); if (e.key === "Escape") setLogoMode("idle"); }}
-                  style={{ ...inputStyle, flex: 1 }}
-                  autoFocus
-                />
-                <button
-                  type="button"
-                  onClick={handleLogoUrl}
-                  style={{ padding: "4px 10px", fontFamily: "var(--font-body)", fontSize: "11px", background: "var(--color-ink)", color: "var(--color-paper)", border: "none", cursor: "pointer" }}
-                >
-                  Use
-                </button>
-              </div>
-            )}
-
-            {logoUrlError && (
-              <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-danger)", marginBottom: 6 }}>{logoUrlError}</p>
-            )}
-
-            {/* Thumbnail */}
-            <div className="flex items-center gap-3">
-              <div style={{
-                width: 40, height: 40, flexShrink: 0,
-                background: "var(--color-surface)",
-                border: "0.5px solid var(--color-border)",
-                borderRadius: 4,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                overflow: "hidden",
-              }}>
-                {draft.logoDataUrl ? (
-                  <Image src={draft.logoDataUrl} alt="Logo" width={32} height={32} unoptimized style={{ objectFit: "contain" }} />
-                ) : (
-                  <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ color: "var(--color-ink-soft)" }}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75 7.409 10.59a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
-                  </svg>
-                )}
-              </div>
-              <div>
-                {draft.logoDataUrl ? (
-                  <>
-                    <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-muted)" }}>{logoCaption()}</p>
-                    <button
-                      type="button"
-                      onClick={removeLogo}
-                      style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-danger)", background: "none", border: "none", cursor: "pointer", padding: 0, marginTop: 2 }}
-                    >
-                      Remove
-                    </button>
-                  </>
-                ) : (
-                  <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)", fontStyle: "italic" }}>No logo set</p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <FieldLabel>Palette</FieldLabel>
-            <div className="flex flex-wrap gap-4">
-              {(["accent", "paper", "text", "headerBg", "headerFg"] as const).map((key) => (
-                <div key={key} className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    value={draft.palette[key]}
-                    onChange={(e) => setPalette(key, e.target.value)}
-                    style={{ width: 28, height: 22, padding: 0, border: "0.5px solid var(--color-border)", cursor: "pointer" }}
-                  />
-                  <span style={{ fontSize: "10px", fontFamily: "var(--font-body)", color: "var(--color-ink-muted)" }}>
-                    {key === "headerBg" ? "Header" : key === "headerFg" ? "Header text" : key.charAt(0).toUpperCase() + key.slice(1)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <FieldLabel>Display font</FieldLabel>
-              <select style={selectStyle} value={draft.typography.display} onChange={(e) => setTypo("display", e.target.value)}>
-                {DISPLAY_FONT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-            <div>
-              <FieldLabel>Body font</FieldLabel>
-              <select style={selectStyle} value={draft.typography.body} onChange={(e) => setTypo("body", e.target.value)}>
-                {BODY_FONT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex justify-end gap-3">
-        <button
-          onClick={onCancel}
-          style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)", background: "none", border: "0.5px solid var(--color-border)", padding: "5px 14px", cursor: "pointer" }}
-        >
-          Cancel
-        </button>
-        <button
-          onClick={() => onSave(draft)}
-          style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-accent-foreground)", background: "var(--color-accent)", border: "none", padding: "5px 14px", cursor: "pointer", fontWeight: 500 }}
-        >
-          Save preset
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function PresetsSection({ onActivate }: { onActivate: (preset: DemoPack) => void }) {
   const [presets, setPresets] = useState<DemoPack[]>([]);
   const [view, setView] = useState<PresetView>("grid");
@@ -1808,13 +1294,7 @@ function PresetsSection({ onActivate }: { onActivate: (preset: DemoPack) => void
   }
 
   function handleDuplicate(preset: DemoPack) {
-    const copy: DemoPack = {
-      ...preset,
-      id: newPresetId(),
-      label: `${preset.label} (copy)`,
-      isCustom: true,
-    };
-    persist([...presets, copy]);
+    persist([...presets, duplicatePreset(preset, newPresetId())]);
   }
 
   function handleDelete(id: string) {
@@ -1832,16 +1312,7 @@ function PresetsSection({ onActivate }: { onActivate: (preset: DemoPack) => void
   }
 
   function handleNewPreset() {
-    const blank: DemoPack = {
-      id: newPresetId(),
-      label: "New Preset",
-      appName: "My Company",
-      logoDataUrl: null,
-      palette: { accent: "#946F1F", paper: "#F4F1EA", text: "#1B1F2A", headerBg: "#1B1F2A", headerFg: "#F4F1EA" },
-      typography: { display: "Source Serif 4", body: "Inter" },
-      description: "",
-      isCustom: true,
-    };
+    const blank = buildBlankPreset(newPresetId());
     persist([...presets, blank]);
     setEditingId(blank.id);
     setView("edit");
@@ -1881,99 +1352,16 @@ function PresetsSection({ onActivate }: { onActivate: (preset: DemoPack) => void
   }
 
   return (
-    <div className="p-5 space-y-5" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
-      <HelpText>
-        Activate a preset to instantly switch the app&rsquo;s branding. Edit or create custom presets to save client-specific themes.
-      </HelpText>
-
-      {/* Card grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12 }}>
-        {presets.map((preset) => {
-          const isActive = activeId === preset.id;
-          return (
-            <div
-              key={preset.id}
-              style={{
-                border: isActive ? `1.5px solid var(--color-accent)` : "0.5px solid var(--color-border)",
-                background: "var(--color-paper)",
-                cursor: "pointer",
-                position: "relative",
-                transition: "border-color 100ms",
-              }}
-              onClick={() => handleActivate(preset)}
-            >
-              {/* Active badge */}
-              {isActive && (
-                <div style={{
-                  position: "absolute", top: 5, left: 5, zIndex: 1,
-                  fontSize: "8px", letterSpacing: "0.1em", textTransform: "uppercase",
-                  background: "var(--color-accent)", color: "var(--color-accent-foreground)",
-                  padding: "1px 5px", fontFamily: "var(--font-body)",
-                }}>
-                  Active
-                </div>
-              )}
-
-              {/* Kebab */}
-              <div style={{ position: "absolute", top: 4, right: 4, zIndex: 2 }} onClick={(e) => e.stopPropagation()}>
-                <KebabMenu
-                  onEdit={() => handleEdit(preset.id)}
-                  onDuplicate={() => handleDuplicate(preset)}
-                  onDelete={() => handleDelete(preset.id)}
-                  isSeeded={!preset.isCustom}
-                />
-              </div>
-
-              <div style={{ padding: 8 }}>
-                <PresetPreview preset={preset} size="mini" />
-              </div>
-
-              <div style={{ padding: "0 8px 8px" }}>
-                <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", fontWeight: 500, color: "var(--color-ink)", marginBottom: 2 }}>
-                  {preset.label}
-                </p>
-                {preset.description && (
-                  <p style={{ fontFamily: "var(--font-body)", fontSize: "10px", color: "var(--color-ink-soft)", lineHeight: 1.3 }}>
-                    {preset.description}
-                  </p>
-                )}
-              </div>
-            </div>
-          );
-        })}
-
-        {/* New preset tile */}
-        <button
-          onClick={handleNewPreset}
-          style={{
-            border: "0.5px dashed var(--color-border)",
-            background: "transparent",
-            cursor: "pointer",
-            minHeight: 120,
-            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6,
-            color: "var(--color-ink-soft)",
-            transition: "border-color 100ms, color 100ms",
-          }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--color-accent)"; (e.currentTarget as HTMLElement).style.color = "var(--color-accent)"; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--color-border)"; (e.currentTarget as HTMLElement).style.color = "var(--color-ink-soft)"; }}
-        >
-          <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
-          <span style={{ fontFamily: "var(--font-body)", fontSize: "11px" }}>New preset</span>
-        </button>
-      </div>
-
-      <div className="flex justify-end">
-        <button
-          onClick={handleRestoreSeeded}
-          style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)", textDecoration: "underline", background: "none", border: "none", cursor: "pointer" }}
-          className="transition-opacity hover:opacity-60"
-        >
-          Restore default presets
-        </button>
-      </div>
-    </div>
+    <PresetLibraryPanel
+      presets={presets}
+      activeId={activeId}
+      onActivate={handleActivate}
+      onEdit={handleEdit}
+      onDuplicate={handleDuplicate}
+      onDelete={handleDelete}
+      onNewPreset={handleNewPreset}
+      onRestoreSeeded={handleRestoreSeeded}
+    />
   );
 }
 
@@ -1983,56 +1371,24 @@ export default function SettingsClient({ displayName }: { displayName: string | 
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
 
-  // Apply stored colors/fonts on mount so live changes persist across navigations
+  // Apply stored colors/fonts on mount so live changes persist across navigations.
   useEffect(() => {
-    const s = readSettings();
-    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-    if (s.accentColor && !isDark) {
-      const legacyInk = s.inkColor ?? DEFAULT_INK;
-      applyBrandTokens(s.accentColor, migratePalette({
-        accent:   s.accentColor,
-        paper:    s.paperColor    ?? DEFAULT_PAPER,
-        text:     s.textColor     ?? legacyInk,
-        headerBg: s.headerBgColor ?? legacyInk,
-        headerFg: s.headerFgColor ?? (s.paperColor ?? DEFAULT_PAPER),
-      }));
-    } else if (s.accentColor && isDark) {
-      applyAccentTokens(s.accentColor);
-    }
-    if (s.displayFont) {
-      loadGoogleFont(s.displayFont);
-      const family = s.displayFont === "system-ui" ? "system-ui, sans-serif" : `'${s.displayFont}', serif`;
-      document.documentElement.style.setProperty("--font-display", family);
-    }
-    if (s.bodyFont) {
-      loadGoogleFont(s.bodyFont);
-      const family = s.bodyFont === "system-ui" ? "system-ui, sans-serif" : `'${s.bodyFont}', sans-serif`;
-      document.documentElement.style.setProperty("--font-body", family);
-    }
-    // Record initial save time as the last-persisted moment
+    applyStoredBrandingSettings();
     setLastSaved(new Date());
   }, []);
 
   async function handleSave() {
-    const payload = buildServerSettingsPayload(readSettings());
-    if (Object.keys(payload).length > 0) {
-      const res = await fetch("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) return;
-    }
+    const serverSaved = await postBrandingSettings(readSettings());
+    if (!serverSaved) return;
 
-    window.dispatchEvent(new CustomEvent("branding-changed"));
-    window.dispatchEvent(new CustomEvent("theme-changed"));
+    notifyBrandingChanged();
     setLastSaved(new Date());
     setSavedFlash(true);
     setTimeout(() => setSavedFlash(false), 2000);
   }
 
   async function handleResetAll() {
-    localStorage.setItem(LS_SETTINGS, JSON.stringify({
+    const defaults = {
       accentColor: DEFAULT_ACCENT,
       paperColor: DEFAULT_PAPER,
       textColor: DEFAULT_TEXT,
@@ -2043,26 +1399,14 @@ export default function SettingsClient({ displayName }: { displayName: string | 
       bodyFont: DEFAULT_BODY_FONT,
       appName: DEFAULT_APP_NAME,
       logoBase64: null,
-    }));
+    };
+
     localStorage.setItem("theme", "light");
-
-    applyBrandTokens(DEFAULT_ACCENT, {
-      accent: DEFAULT_ACCENT, paper: DEFAULT_PAPER, text: DEFAULT_TEXT,
-      headerBg: DEFAULT_HEADER_BG, headerFg: DEFAULT_HEADER_FG,
-    });
-    document.documentElement.style.setProperty("--font-display", `'${DEFAULT_DISPLAY_FONT}', serif`);
-    document.documentElement.style.setProperty("--font-body", "'Inter', sans-serif");
     document.documentElement.setAttribute("data-theme", "light");
-
-    // Notify HeaderBar and other consumers that branding/theme has reset immediately
-    window.dispatchEvent(new CustomEvent("branding-reset"));
-    window.dispatchEvent(new CustomEvent("theme-changed"));
-
-    // Persist to server — await so .settings.json is correct for the next SSR request
-    await fetch("/api/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ appName: DEFAULT_APP_NAME, logoBase64: null, accentColor: DEFAULT_ACCENT, inkColor: null }),
+    await persistBrandingSettings(defaults, {
+      replace: true,
+      brandingEvent: "reset",
+      themeChanged: true,
     });
 
     setSavedFlash(true);
@@ -2070,97 +1414,22 @@ export default function SettingsClient({ displayName }: { displayName: string | 
   }
 
   function handlePresetActivate(preset: DemoPack) {
-    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-    if (!isDark) {
-      applyBrandTokens(preset.palette.accent, preset.palette);
-    } else {
-      applyAccentTokens(preset.palette.accent);
-    }
-
-    // Apply typography
-    loadGoogleFont(preset.typography.display);
-    loadGoogleFont(preset.typography.body);
-    const displayFamily = preset.typography.display === "system-ui"
-      ? "system-ui, sans-serif"
-      : `'${preset.typography.display}', serif`;
-    const bodyFamily = preset.typography.body === "system-ui"
-      ? "system-ui, sans-serif"
-      : `'${preset.typography.body}', sans-serif`;
-    document.documentElement.style.setProperty("--font-display", displayFamily);
-    document.documentElement.style.setProperty("--font-body",    bodyFamily);
-
-    // Persist to localStorage
-    const s = readSettings();
-    writeSettings({
-      ...s,
-      accentColor:   preset.palette.accent,
-      paperColor:    preset.palette.paper,
-      textColor:     preset.palette.text,
-      headerBgColor: preset.palette.headerBg,
-      headerFgColor: preset.palette.headerFg,
-      inkColor:      preset.palette.headerBg,  // keep legacy field in sync
-      displayFont:   preset.typography.display,
-      bodyFont:      preset.typography.body,
-      appName:       preset.appName,
-      logoBase64:    preset.logoDataUrl,
-    });
-
-    // Persist app name + logo to server
-    void fetch("/api/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        appName:       preset.appName,
-        logoBase64:    preset.logoDataUrl,
-        accentColor:   preset.palette.accent,
-        paperColor:    preset.palette.paper,
-        textColor:     preset.palette.text,
-        headerBgColor: preset.palette.headerBg,
-        headerFgColor: preset.palette.headerFg,
-        inkColor:      preset.palette.headerBg,
-      }),
-    });
-
-    window.dispatchEvent(new CustomEvent("branding-changed"));
-    window.dispatchEvent(new CustomEvent("theme-changed"));
+    void persistBrandingSettings(buildPresetSettingsPatch(preset));
   }
 
-  async function handleBrandApply(result: BrandResult) {
-    const patch = buildBrandSettingsPatch(result);
-    const palette = paletteFromBrandResult(result);
-    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-
-    if (!isDark) applyBrandTokens(palette.accent, palette);
-    else applyAccentTokens(palette.accent);
-
-    if (patch.displayFont) {
-      loadGoogleFont(patch.displayFont);
-      document.documentElement.style.setProperty("--font-display", patch.displayFont === "system-ui" ? "system-ui, sans-serif" : `'${patch.displayFont}', serif`);
-    }
-    if (patch.bodyFont) {
-      loadGoogleFont(patch.bodyFont);
-      document.documentElement.style.setProperty("--font-body", patch.bodyFont === "system-ui" ? "system-ui, sans-serif" : `'${patch.bodyFont}', sans-serif`);
-    }
-
-    writeSettings({ ...readSettings(), ...patch });
-    await fetch("/api/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildServerSettingsPayload(patch)),
-    });
-
-    window.dispatchEvent(new CustomEvent("branding-changed"));
-    window.dispatchEvent(new CustomEvent("theme-changed"));
+  async function handleBrandApply(result: BrandResult, sourceUrl?: string) {
+    const patch = buildBrandSettingsPatch(result, sourceUrl);
+    await persistBrandingSettings(patch);
     setLastSaved(new Date());
     setSavedFlash(true);
     setTimeout(() => setSavedFlash(false), 2000);
   }
 
-  function handleBrandSavePreset(result: BrandResult, sourceUrl: string): DemoPack {
-    const preset = buildPresetFromBrandResult(result, newPresetId(), sourceUrl);
-    savePresets([...getPresets(), preset]);
+  function handleBrandSavePreset(result: BrandResult, sourceUrl: string): { preset: DemoPack; action: "created" | "updated" } {
+    const upsert = upsertBrandPreset(getPresets(), result, newPresetId(), sourceUrl);
+    savePresets(upsert.presets);
     window.dispatchEvent(new CustomEvent("presets-changed"));
-    return preset;
+    return { preset: upsert.preset, action: upsert.action };
   }
 
   const sectionGap = "mb-10";

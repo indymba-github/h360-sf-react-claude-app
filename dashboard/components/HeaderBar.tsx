@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useNotificationPoller } from "@/hooks/useNotificationPoller";
 import NotificationBell from "./NotificationBell";
+import { resolveBrandingSettings } from "@/lib/branding-settings";
 
 const NAV = [
   { href: "/dashboard", label: "Home" },
@@ -20,18 +21,7 @@ interface HeaderBarProps {
 }
 
 function readBrandingFromStorage(serverAppName: string, serverLogoSrc: string | null | undefined) {
-  try {
-    const raw = localStorage.getItem("settings");
-    if (!raw) return { appName: serverAppName, logoSrc: serverLogoSrc };
-    const s = JSON.parse(raw) as Record<string, string | null | undefined>;
-    // Use localStorage value when present; "hasOwnProperty" check lets explicit null mean "use default"
-    const appName = typeof s.appName === "string" ? s.appName : serverAppName;
-    // If logoBase64 key exists (even as null), trust localStorage; otherwise fall back to server prop
-    const logoSrc = "logoBase64" in s ? (s.logoBase64 ?? null) : serverLogoSrc;
-    return { appName, logoSrc };
-  } catch {
-    return { appName: serverAppName, logoSrc: serverLogoSrc };
-  }
+  return resolveBrandingSettings(localStorage.getItem("settings"), serverAppName, serverLogoSrc);
 }
 
 export default function HeaderBar({ appName: serverAppName, logoSrc: serverLogoSrc, userName }: HeaderBarProps) {
@@ -48,6 +38,7 @@ export default function HeaderBar({ appName: serverAppName, logoSrc: serverLogoS
       setAppName(n);
       setLogoSrc(l);
     };
+    handler();
     window.addEventListener("branding-changed", handler);
     window.addEventListener("branding-reset", handler);
     return () => {

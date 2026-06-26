@@ -10,6 +10,7 @@ export interface ExtractedBrandResult {
     secondary: string | null;
     accent: string | null;
     all: string[];
+    tagged?: Array<{ hex: string; source?: string }>;
   };
   fonts: {
     heading: string | null;
@@ -42,6 +43,74 @@ function cleanLabel(value: string | null | undefined, fallback: string): string 
   return trimmed.slice(0, 30);
 }
 
+function labelFromSourceUrl(sourceUrl?: string): string | null {
+  if (!sourceUrl?.trim()) return null;
+  try {
+    const url = new URL(sourceUrl.startsWith("http") ? sourceUrl : `https://${sourceUrl}`);
+    const hostParts = url.hostname.replace(/^www\./i, "").split(".").filter(Boolean);
+    const base = hostParts[0];
+    if (!base) return null;
+    return base
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((word) => word.length <= 3 ? word.toUpperCase() : `${word[0].toUpperCase()}${word.slice(1).toLowerCase()}`)
+      .join(" ")
+      .slice(0, 30);
+  } catch {
+    return null;
+  }
+}
+
+export function deriveBrandLabel(result: ExtractedBrandResult, sourceUrl?: string): string {
+  return cleanLabel(result.companyName, labelFromSourceUrl(sourceUrl) ?? "Extracted Brand");
+}
+
+export function getDisplayBrandColors(result: ExtractedBrandResult): string[] {
+  const candidates = [
+    result.colors.primary,
+    result.colors.secondary,
+    result.colors.accent,
+    ...result.colors.all,
+    ...(result.colors.tagged?.map((color) => color.hex) ?? []),
+  ];
+  const seen = new Set<string>();
+  return candidates.filter((color): color is string => {
+    if (!isHex(color)) return false;
+    const normalized = color.toLowerCase();
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
+}
+
+export interface BrandExtractionSummary {
+  displayName: string;
+  colors: string[];
+  fonts: string[];
+  hasSaveableLogo: boolean;
+  hasLogoUrlOnly: boolean;
+  hasThemeDetails: boolean;
+}
+
+export function summarizeBrandExtraction(
+  result: ExtractedBrandResult,
+  sourceUrl?: string,
+): BrandExtractionSummary {
+  const colors = getDisplayBrandColors(result);
+  const fonts = [result.fonts.heading, result.fonts.body].filter((font): font is string => Boolean(font));
+  const hasSaveableLogo = Boolean(result.logo);
+  const hasLogoUrlOnly = Boolean(!result.logo && result.logoUrl);
+
+  return {
+    displayName: deriveBrandLabel(result, sourceUrl),
+    colors,
+    fonts,
+    hasSaveableLogo,
+    hasLogoUrlOnly,
+    hasThemeDetails: colors.length > 0 || hasSaveableLogo || fonts.length > 0,
+  };
+}
+
 function isHex(value: string | null | undefined): value is string {
   return /^#[0-9a-fA-F]{6}$/.test(value ?? "");
 }
@@ -64,18 +133,21 @@ export function paletteFromBrandResult(result: ExtractedBrandResult): Palette {
   };
 }
 
-export function buildBrandSettingsPatch(result: ExtractedBrandResult): BrandSettingsPatch {
-  const palette = paletteFromBrandResult(result);
+export function buildBrandSettingsPatch(result: ExtractedBrandResult, sourceUrl?: string): BrandSettingsPatch {
   const patch: BrandSettingsPatch = {
-    accentColor: palette.accent,
-    paperColor: palette.paper,
-    textColor: palette.text,
-    headerBgColor: palette.headerBg,
-    headerFgColor: palette.headerFg,
-    inkColor: palette.headerBg,
+    appName: deriveBrandLabel(result, sourceUrl),
   };
 
-  if (result.companyName?.trim()) patch.appName = cleanLabel(result.companyName, "Extracted Brand");
+  if (getDisplayBrandColors(result).length > 0) {
+    const palette = paletteFromBrandResult(result);
+    patch.accentColor = palette.accent;
+    patch.paperColor = palette.paper;
+    patch.textColor = palette.text;
+    patch.headerBgColor = palette.headerBg;
+    patch.headerFgColor = palette.headerFg;
+    patch.inkColor = palette.headerBg;
+  }
+
   if (result.logo) patch.logoBase64 = result.logo;
   if (result.fonts.heading) patch.displayFont = result.fonts.heading;
   if (result.fonts.body) patch.bodyFont = result.fonts.body;
@@ -88,7 +160,7 @@ export function buildPresetFromBrandResult(
   id: string,
   sourceUrl?: string,
 ): DemoPack {
-  const label = cleanLabel(result.companyName, "Extracted Brand");
+  const label = deriveBrandLabel(result, sourceUrl);
   const palette = paletteFromBrandResult(result);
 
   return {
@@ -103,6 +175,71 @@ export function buildPresetFromBrandResult(
     },
     description: sourceUrl ? `Extracted from ${sourceUrl}` : "Extracted from website",
     isCustom: true,
+  };
+}
+
+
+export function buildPresetSettingsPatch(preset: DemoPack): BrandSettingsPatch {
+  return {
+    accentColor: preset.palette.accent,
+    paperColor: preset.palette.paper,
+    textColor: preset.palette.text,
+    headerBgColor: preset.palette.headerBg,
+    headerFgColor: preset.palette.headerFg,
+    inkColor: preset.palette.headerBg,
+    displayFont: preset.typography.display,
+    bodyFont: preset.typography.body,
+    appName: preset.appName,
+    logoBase64: preset.logoDataUrl,
+  };
+}
+
+function normalizePresetLabel(value: string | null | undefined, sourceUrl?: string): string {
+  return cleanLabel(value, labelFromSourceUrl(sourceUrl) ?? "Extracted Brand").toLowerCase();
+}
+
+export function findMatchingBrandPreset(
+  presets: DemoPack[],
+  result: ExtractedBrandResult,
+  sourceUrl?: string,
+): DemoPack | null {
+  const label = normalizePresetLabel(result.companyName, sourceUrl);
+  return presets.find((preset) => preset.isCustom && preset.label.trim().toLowerCase() === label) ?? null;
+}
+
+export interface BrandPresetUpsertResult {
+  action: "created" | "updated";
+  preset: DemoPack;
+  presets: DemoPack[];
+}
+
+export function upsertBrandPreset(
+  presets: DemoPack[],
+  result: ExtractedBrandResult,
+  newId: string,
+  sourceUrl?: string,
+): BrandPresetUpsertResult {
+  const replacement = buildPresetFromBrandResult(result, newId, sourceUrl);
+  const existing = findMatchingBrandPreset(presets, result, sourceUrl);
+
+  if (!existing) {
+    return {
+      action: "created",
+      preset: replacement,
+      presets: [...presets, replacement],
+    };
+  }
+
+  const updated: DemoPack = {
+    ...replacement,
+    id: existing.id,
+    isCustom: true,
+  };
+
+  return {
+    action: "updated",
+    preset: updated,
+    presets: presets.map((preset) => preset.id === existing.id ? updated : preset),
   };
 }
 

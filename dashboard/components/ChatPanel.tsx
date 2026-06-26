@@ -23,6 +23,7 @@ import {
   RESPONSE_PATH_LABELS,
   getNextResponseDescription,
   getResponsePathDetail,
+  getRouteReceiptText,
   getSelectableResponsePaths,
   normalizeResponsePath,
   type ResponsePath,
@@ -652,21 +653,14 @@ function ResponsePathFooter({
   contextPrefetched?: boolean;
   contextSource?: "mcp" | "rest" | "none";
 }) {
-  let label: string;
-  const normalizedPath = normalizeResponsePath(baseMode, path);
-
-  if (normalizedPath === "agentforce-direct" || baseMode === "agentforce") {
-    label = "Answered directly by Agentforce";
-  } else if (normalizedPath === "trust-layer") {
-    const model = findModelByApiName(modelUsed ?? "")?.label ?? "Salesforce Models API";
-    label = `Answered by ${model} via the Einstein Trust Layer`;
-    if (contextSource === "mcp") label += " after MCP context collection";
-    else if (contextSource === "rest") label += " after Salesforce context prefetch";
-    else if (contextPrefetched) label += " after context collection";
-  } else {
-    const source = baseMode === "hosted" ? "Hosted MCP" : "Local MCP";
-    label = `Answered by Claude using ${source}`;
-  }
+  const modelLabel = modelUsed ? (findModelByApiName(modelUsed)?.label ?? "Salesforce Models API") : undefined;
+  const label = getRouteReceiptText({
+    baseMode,
+    path,
+    modelLabel,
+    contextPrefetched,
+    contextSource,
+  });
 
   return (
     <div
@@ -676,11 +670,23 @@ function ResponsePathFooter({
         borderTop: "0.5px solid var(--color-border)",
         fontFamily: "var(--font-body)",
         fontSize: "10px",
-        fontStyle: "italic",
         color: "var(--color-ink-soft)",
+        display: "flex",
+        gap: "6px",
+        alignItems: "baseline",
       }}
     >
-      {label}
+      <span
+        style={{
+          fontSize: "8px",
+          letterSpacing: "0.12em",
+          textTransform: "uppercase",
+          color: "var(--color-ink-soft)",
+        }}
+      >
+        Route
+      </span>
+      <span>{label}</span>
     </div>
   );
 }
