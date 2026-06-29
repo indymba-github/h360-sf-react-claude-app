@@ -97,3 +97,80 @@ export function getRouteReceiptText({
 
   return `${BASE_MODE_LABELS[baseMode]} gathered context -> Claude answered`;
 }
+
+export interface RouteDiagnosticsOptions extends RouteReceiptOptions {
+  toolCount?: number;
+  durationMs?: number;
+}
+
+export interface RouteDiagnostics {
+  baseMode: BaseMode;
+  path: ResponsePath;
+  dataLayer: string;
+  answerLayer: string;
+  trustLayer: boolean;
+  toolCount: number;
+  durationLabel?: string;
+}
+
+export interface RouteDiagnosticsRow {
+  label: string;
+  value: string;
+}
+
+function formatDuration(ms?: number): string | undefined {
+  if (ms === undefined || !Number.isFinite(ms) || ms < 0) return undefined;
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function getDataLayerLabel(baseMode: BaseMode, path: ResponsePath, contextSource?: ContextSource): string {
+  const normalized = normalizeResponsePath(baseMode, path);
+
+  if (normalized === "agentforce-direct" || baseMode === "agentforce") return "None";
+
+  if (normalized === "trust-layer") {
+    if (contextSource === "rest") return "Salesforce REST";
+    if (contextSource === "none") return "None";
+  }
+
+  return BASE_MODE_LABELS[baseMode];
+}
+
+function getAnswerLayerLabel(baseMode: BaseMode, path: ResponsePath, modelLabel?: string): string {
+  const normalized = normalizeResponsePath(baseMode, path);
+
+  if (normalized === "agentforce-direct" || baseMode === "agentforce") return "Agentforce";
+  if (normalized === "trust-layer") return modelLabel ?? "Salesforce Models API";
+  return "Claude";
+}
+
+export function buildRouteDiagnostics({
+  baseMode,
+  path,
+  modelLabel,
+  contextSource,
+  toolCount = 0,
+  durationMs,
+}: RouteDiagnosticsOptions): RouteDiagnostics {
+  const normalized = normalizeResponsePath(baseMode, path);
+  return {
+    baseMode,
+    path: normalized,
+    dataLayer: getDataLayerLabel(baseMode, normalized, contextSource),
+    answerLayer: getAnswerLayerLabel(baseMode, normalized, modelLabel),
+    trustLayer: normalized === "trust-layer" || normalized === "agentforce-direct" || baseMode === "agentforce",
+    toolCount,
+    ...(formatDuration(durationMs) ? { durationLabel: formatDuration(durationMs) } : {}),
+  };
+}
+
+export function getRouteDiagnosticsRows(diagnostics: RouteDiagnostics): RouteDiagnosticsRow[] {
+  return [
+    { label: "Data", value: diagnostics.dataLayer },
+    { label: "Answer", value: diagnostics.answerLayer },
+    { label: "Trust", value: diagnostics.trustLayer ? "Yes" : "No" },
+    { label: "Tools", value: String(diagnostics.toolCount) },
+    ...(diagnostics.durationLabel ? [{ label: "Time", value: diagnostics.durationLabel }] : []),
+  ];
+}

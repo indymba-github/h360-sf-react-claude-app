@@ -17,6 +17,8 @@ import { connectAccountAgentMcp, isAccountAgentEnabled, ACCOUNT_AGENT_PREFIX } f
 import { classifySummaryIntent, shouldExposeSummaryAgent } from "@/lib/summary-router";
 import { getSettings } from "@/lib/settings";
 import { SF_MODELS_DEFAULT_API_NAME } from "@/lib/salesforce-models-catalog";
+import { isMcpAuthFailureMessage, shouldRefreshHostedMcpContext } from "@/lib/mcp-auth-errors";
+import { buildTrustLayerMcpCalls } from "@/lib/trust-layer-mcp-plan";
 import { prefetchAccountContext, formatPrefetchedContext } from "@/lib/trust-layer-context";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -578,15 +580,7 @@ function sseEvent(data: object): Uint8Array {
 
 function isMcpAuthError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  const msg = err.message.toLowerCase();
-  return (
-    msg.includes("401") ||
-    msg.includes("unauthorized") ||
-    msg.includes("invalid_token") ||
-    msg.includes("invalid token") ||
-    msg.includes("token expired") ||
-    msg.includes("access_denied")
-  );
+  return isMcpAuthFailureMessage(err.message);
 }
 
 /** True when the hosted MCP server dropped its session state (404 "not initialized"). */
@@ -683,36 +677,55 @@ async function collectTrustLayerMcpContext({
   try {
     client = await connectMcpClient(accessToken, instanceUrl, mcpAccessToken, effectiveMode);
     const { tools } = await client.listTools();
-    const available = new Set(tools.map((tool) => tool.name));
+    const calls = buildTrustLayerMcpCalls({
+      availableTools: tools.map((tool) => ({
+        name: tool.name,
+        inputSchema: tool.inputSchema,
+      })),
+      accountId: accountContext?.accountId,
+    });
     const sections: string[] = [];
 
-    const callIfAvailable = async (
-      toolName: string,
-      title: string,
-      args: ToolInput,
-    ) => {
-      if (!available.has(toolName)) return;
-      const result = await client!.callTool({ name: toolName, arguments: args });
-      sections.push(`${title}\n${extractText(result.content)}`);
-    };
-
-    if (accountContext?.accountId) {
-      const accountArgs = { account_id: accountContext.accountId };
-      await callIfAvailable("sf_get_account", "ACCOUNT", accountArgs);
-      await callIfAvailable("sf_get_opportunities", "OPPORTUNITIES", { ...accountArgs, limit: 20 });
-      await callIfAvailable("sf_get_contacts", "CONTACTS", { ...accountArgs, limit: 20 });
-      await callIfAvailable("sf_get_cases", "CASES", { ...accountArgs, limit: 20 });
-      await callIfAvailable("sf_get_financial_accounts", "FINANCIAL ACCOUNTS", { ...accountArgs, limit: 20 });
-      await callIfAvailable("sf_get_news_alerts", "NEWS ALERTS", { ...accountArgs, limit: 10 });
-      await callIfAvailable("sf_get_tasks", "TASKS", { ...accountArgs, limit: 20 });
-    } else {
-      await callIfAvailable("sf_get_pipeline_summary", "PIPELINE SUMMARY", {});
-      await callIfAvailable("sf_get_recent_activity", "RECENT ACTIVITY", { limit: 20 });
-      await callIfAvailable("sf_list_accounts", "ACCOUNTS", { limit: 20 });
-      await callIfAvailable("sf_get_news_alerts", "NEWS ALERTS", { limit: 10 });
+    if (calls.length === 0) {
+      console.warn("[chat] Trust Layer MCP context collection found no compatible tools.", {
+        mode: effectiveMode,
+        availableToolCount: tools.length,
+        availableToolNames: tools.map((tool) => tool.name).slice(0, 12),
+      });
+      return { text: "", source: "none" };
     }
 
-    if (sections.length === 0) return { text: "", source: "none" };
+    console.log("[chat] Trust Layer MCP context plan:", {
+      mode: effectiveMode,
+      availableToolCount: tools.length,
+      selectedCalls: calls.map((call) => `${call.title}:${call.toolName}`),
+    });
+
+    for (const call of calls) {
+      try {
+        const result = await client.callTool({
+          name: call.toolName,
+          arguments: call.args as ToolInput,
+        });
+        const text = extractText(result.content);
+        if (text.trim() && text !== "No results") {
+          sections.push(`${call.title}\n${text}`);
+        }
+      } catch (err) {
+        console.warn(
+          `[chat] Trust Layer MCP context tool failed (${call.title}:${call.toolName}); continuing.`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
+    if (sections.length === 0) {
+      console.warn("[chat] Trust Layer MCP context collection completed with no usable text.", {
+        mode: effectiveMode,
+        selectedCallCount: calls.length,
+      });
+      return { text: "", source: "none" };
+    }
     return { text: sections.join("\n\n---\n\n"), source: "mcp" };
   } finally {
     if (client) await client.close().catch(() => {});
@@ -723,12 +736,16 @@ async function collectTrustLayerContext({
   accessToken,
   instanceUrl,
   mcpAccessToken,
+  mcpRefreshToken,
+  refreshHostedMcpSession,
   effectiveMode,
   accountContext,
 }: {
   accessToken: string;
   instanceUrl: string;
   mcpAccessToken?: string;
+  mcpRefreshToken?: string;
+  refreshHostedMcpSession?: () => Promise<string>;
   effectiveMode: McpMode;
   accountContext?: AccountContext;
 }): Promise<TrustLayerContextCollection> {
@@ -742,7 +759,30 @@ async function collectTrustLayerContext({
     });
     if (mcpContext.text.trim()) return mcpContext;
   } catch (err) {
-    console.warn("[chat] Trust Layer MCP context collection failed; falling back when possible:", err);
+    const message = err instanceof Error ? err.message : String(err);
+    if (shouldRefreshHostedMcpContext({
+      effectiveMode,
+      hasMcpRefreshToken: Boolean(mcpRefreshToken && refreshHostedMcpSession),
+      errorMessage: message,
+    }) && refreshHostedMcpSession) {
+      try {
+        console.warn("[chat] Trust Layer Hosted MCP token invalid; refreshing session and retrying context collection.");
+        const refreshedMcpAccessToken = await refreshHostedMcpSession();
+        const refreshedContext = await collectTrustLayerMcpContext({
+          accessToken,
+          instanceUrl,
+          mcpAccessToken: refreshedMcpAccessToken,
+          effectiveMode,
+          accountContext,
+        });
+        if (refreshedContext.text.trim()) return refreshedContext;
+        console.warn("[chat] Trust Layer Hosted MCP retry completed but produced no context; falling back when possible.");
+      } catch (refreshErr) {
+        console.warn("[chat] Trust Layer Hosted MCP refresh/retry failed; falling back when possible:", refreshErr);
+      }
+    } else {
+      console.warn("[chat] Trust Layer MCP context collection failed; falling back when possible:", err);
+    }
   }
 
   if (accountContext?.accountId) {
@@ -759,6 +799,7 @@ async function collectTrustLayerContext({
 }
 
 export async function POST(request: NextRequest) {
+  const requestStartedAt = Date.now();
   const session = await getSession();
   if (!session.accessToken || !session.instanceUrl) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -803,9 +844,12 @@ export async function POST(request: NextRequest) {
         accessToken: session.accessToken,
         instanceUrl: session.instanceUrl,
         mcpAccessToken: session.mcpAccessToken,
+        mcpRefreshToken: session.mcpRefreshToken,
+        refreshHostedMcpSession: () => refreshMcpSession(session),
         effectiveMode,
         accountContext,
       });
+      console.log("[chat] Trust Layer context source:", collectedContext.source);
 
       const systemPrompt = buildTrustLayerSystemPrompt(accountContext, collectedContext.text);
 
@@ -828,6 +872,7 @@ export async function POST(request: NextRequest) {
         modelUsed: selectedModel,
         contextPrefetched: collectedContext.source !== "none",
         contextSource: collectedContext.source,
+        durationMs: Date.now() - requestStartedAt,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Salesforce Models API error";
@@ -1338,6 +1383,7 @@ export async function POST(request: NextRequest) {
           render: pendingRenderDirective,
           consultedAgentforce: usedAgentforce,
           summaryAgentUsed: usedSummaryAgent || undefined,
+          durationMs: Date.now() - requestStartedAt,
         }));
       } catch (err) {
         const isSessionExpired =

@@ -12,6 +12,12 @@ interface TokenCache {
 let tokenCache: TokenCache | null = null;
 let pendingTokenFetch: Promise<string> | null = null;
 
+export function getAgentforceCredentialLogMessage(usesConsolidatedCredentials: boolean): string {
+  return usesConsolidatedCredentials
+    ? "[agentforce-client] Agentforce credential source: SF_SERVER_*"
+    : "[agentforce-client] Agentforce credential source: SF_AGENT_* (legacy env names)";
+}
+
 export async function getAgentClientCredentialsToken(): Promise<string> {
   if (tokenCache && Date.now() < tokenCache.expiresAt - 60_000) {
     return tokenCache.accessToken;
@@ -21,11 +27,7 @@ export async function getAgentClientCredentialsToken(): Promise<string> {
   const loginUrl = (process.env.SF_LOGIN_URL ?? "").replace(/\/$/, "");
   const clientId = process.env.SF_SERVER_CLIENT_ID || process.env.SF_AGENT_CLIENT_ID || "";
   const clientSecret = process.env.SF_SERVER_CLIENT_SECRET || process.env.SF_AGENT_CLIENT_SECRET || "";
-  if (process.env.SF_SERVER_CLIENT_ID) {
-    console.log("[agentforce-client] Using consolidated SF_SERVER_* credentials");
-  } else {
-    console.log("[agentforce-client] Falling back to legacy SF_AGENT_* credentials");
-  }
+  console.log(getAgentforceCredentialLogMessage(Boolean(process.env.SF_SERVER_CLIENT_ID)));
 
   pendingTokenFetch = (async () => {
     const res = await fetch(`${loginUrl}/services/oauth2/token`, {

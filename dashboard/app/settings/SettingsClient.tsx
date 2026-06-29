@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback, type DragEvent } from "react"
 import Image from "next/image";
 import SectionHeader from "@/components/SectionHeader";
 import BrandFromWebsiteSection from "@/components/settings/BrandFromWebsiteSection";
+import ConnectionDiagnosticsSection from "@/components/settings/ConnectionDiagnosticsSection";
 import PresetEditPanel from "@/components/settings/PresetEditPanel";
 import PresetLibraryPanel from "@/components/settings/PresetLibraryPanel";
 import { getPresets, savePresets, restoreSeeded, newPresetId, type DemoPack } from "@/lib/demoPacks";
@@ -1515,9 +1516,15 @@ export default function SettingsClient({ displayName }: { displayName: string | 
       </div>
 
       {/* 09 AI provider */}
-      <div style={{ marginBottom: "72px" }}>
+      <div className={sectionGap}>
         <div className="mb-4"><SectionHeader number="09" title="AI provider" /></div>
         <AiProviderSection />
+      </div>
+
+      {/* 10 Connection diagnostics */}
+      <div style={{ marginBottom: "72px" }}>
+        <div className="mb-4"><SectionHeader number="10" title="Connection diagnostics" /></div>
+        <ConnectionDiagnosticsSection />
       </div>
 
       {/* Sticky save footer */}

@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   RESPONSE_PATH_LABELS,
+  buildRouteDiagnostics,
+  getRouteDiagnosticsRows,
   getNextResponseDescription,
   getRouteReceiptText,
   getSelectableResponsePaths,
@@ -50,4 +52,66 @@ test("route receipts explain the data and answer path", () => {
     getRouteReceiptText({ baseMode: "hosted", path: "agentforce-direct" }),
     "Agentforce answered directly",
   );
+});
+
+test("route diagnostics summarize default MCP answers", () => {
+  const diagnostics = buildRouteDiagnostics({
+    baseMode: "hosted",
+    path: "default",
+    toolCount: 3,
+    durationMs: 1420,
+  });
+
+  assert.deepEqual(diagnostics, {
+    baseMode: "hosted",
+    path: "default",
+    dataLayer: "Hosted MCP",
+    answerLayer: "Claude",
+    trustLayer: false,
+    toolCount: 3,
+    durationLabel: "1.4s",
+  });
+});
+
+test("route diagnostics identify Trust Layer answers", () => {
+  const diagnostics = buildRouteDiagnostics({
+    baseMode: "local",
+    path: "trust-layer",
+    modelLabel: "GPT-4.1",
+    contextSource: "rest",
+    durationMs: 840,
+  });
+
+  assert.equal(diagnostics.dataLayer, "Salesforce REST");
+  assert.equal(diagnostics.answerLayer, "GPT-4.1");
+  assert.equal(diagnostics.trustLayer, true);
+  assert.equal(diagnostics.durationLabel, "840ms");
+});
+
+test("route diagnostics identify Agentforce direct answers", () => {
+  const diagnostics = buildRouteDiagnostics({
+    baseMode: "hosted",
+    path: "agentforce-direct",
+  });
+
+  assert.equal(diagnostics.dataLayer, "None");
+  assert.equal(diagnostics.answerLayer, "Agentforce");
+  assert.equal(diagnostics.trustLayer, true);
+});
+
+test("route diagnostics rows are display ready", () => {
+  const rows = getRouteDiagnosticsRows(buildRouteDiagnostics({
+    baseMode: "hosted",
+    path: "default",
+    toolCount: 2,
+    durationMs: 2200,
+  }));
+
+  assert.deepEqual(rows, [
+    { label: "Data", value: "Hosted MCP" },
+    { label: "Answer", value: "Claude" },
+    { label: "Trust", value: "No" },
+    { label: "Tools", value: "2" },
+    { label: "Time", value: "2.2s" },
+  ]);
 });

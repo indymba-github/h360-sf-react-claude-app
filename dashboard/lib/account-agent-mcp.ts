@@ -10,16 +10,18 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
+export function getAccountAgentCredentialLogMessage(usesConsolidatedCredentials: boolean): string {
+  return usesConsolidatedCredentials
+    ? "[account-agent-mcp] Account Agent MCP credential source: SF_SERVER_*"
+    : "[account-agent-mcp] Account Agent MCP credential source: SF_MCP_ACCOUNT_AGENT_* (legacy env names)";
+}
+
 async function getAccountAgentToken(): Promise<string> {
   const clientId = process.env.SF_SERVER_CLIENT_ID || process.env.SF_MCP_ACCOUNT_AGENT_CLIENT_ID;
   const clientSecret = process.env.SF_SERVER_CLIENT_SECRET || process.env.SF_MCP_ACCOUNT_AGENT_CLIENT_SECRET;
   const loginUrl = process.env.SF_LOGIN_URL?.replace(/\/$/, "");
 
-  if (process.env.SF_SERVER_CLIENT_ID) {
-    console.log("[account-agent-mcp] Using consolidated SF_SERVER_* credentials");
-  } else {
-    console.log("[account-agent-mcp] Falling back to legacy SF_MCP_ACCOUNT_AGENT_* credentials");
-  }
+  console.log(getAccountAgentCredentialLogMessage(Boolean(process.env.SF_SERVER_CLIENT_ID)));
 
   if (!clientId || !clientSecret || !loginUrl) {
     throw new Error(

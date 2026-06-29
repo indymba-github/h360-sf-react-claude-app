@@ -836,14 +836,16 @@ export interface SfModelsChatResult {
   text: string;
 }
 
+export function getModelsCredentialLogMessage(usesConsolidatedCredentials: boolean): string {
+  return usesConsolidatedCredentials
+    ? "[salesforce-llm] Models API credential source: SF_SERVER_*"
+    : "[salesforce-llm] Models API credential source: SF_MODELS_* (legacy env names)";
+}
+
 async function getModelsAccessToken(): Promise<string> {
   const clientId = process.env.SF_SERVER_CLIENT_ID || process.env.SF_MODELS_CLIENT_ID;
   const clientSecret = process.env.SF_SERVER_CLIENT_SECRET || process.env.SF_MODELS_CLIENT_SECRET;
-  if (process.env.SF_SERVER_CLIENT_ID) {
-    console.log("[salesforce-llm] Using consolidated SF_SERVER_* credentials");
-  } else {
-    console.log("[salesforce-llm] Falling back to legacy SF_MODELS_* credentials");
-  }
+  console.log(getModelsCredentialLogMessage(Boolean(process.env.SF_SERVER_CLIENT_ID)));
   const tokenUrl = `${process.env.SF_LOGIN_URL?.replace(/\/$/, "")}/services/oauth2/token`;
   const res = await fetch(tokenUrl, {
     method: "POST",

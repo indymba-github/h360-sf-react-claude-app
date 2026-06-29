@@ -158,6 +158,7 @@ async function endSession(accessToken: string, sessionId: string): Promise<void>
 // ── Route handler ─────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
+  const requestStartedAt = Date.now();
   const session = await getSession();
   if (!session.accessToken) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -248,6 +249,7 @@ export async function POST(request: NextRequest) {
         results: response.results,
         summaries: response.summaries,
         render: directive,
+        durationMs: Date.now() - requestStartedAt,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

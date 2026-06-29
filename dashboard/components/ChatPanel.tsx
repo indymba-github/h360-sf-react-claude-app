@@ -21,6 +21,8 @@ import type { RenderDirective } from "@/lib/render-directives";
 import { findModelByApiName } from "@/lib/salesforce-models-catalog";
 import {
   RESPONSE_PATH_LABELS,
+  buildRouteDiagnostics,
+  getRouteDiagnosticsRows,
   getNextResponseDescription,
   getResponsePathDetail,
   getRouteReceiptText,
@@ -66,6 +68,7 @@ interface Message {
   modelUsed?: string;
   contextPrefetched?: boolean;
   contextSource?: "mcp" | "rest" | "none";
+  routeDurationMs?: number;
   summaryAgentUsed?: boolean;
   responseBaseMode?: McpMode;
   responsePath?: ResponsePath;
@@ -74,7 +77,7 @@ interface Message {
 // SSE event shapes coming from the server
 interface SseToken         { type: "token";         text: string }
 interface SseStatus        { type: "status";        text: string }
-interface SseDone          { type: "done";           toolCalls: ToolCall[]; render?: RenderDirective | null; consultedAgentforce?: boolean; summaryAgentUsed?: boolean }
+interface SseDone          { type: "done";           toolCalls: ToolCall[]; render?: RenderDirective | null; consultedAgentforce?: boolean; summaryAgentUsed?: boolean; durationMs?: number }
 interface SseError         { type: "error";          error: string }
 interface SseWriteComplete { type: "write_complete"; toolName: string; success: boolean; url: string | null }
 interface SseToolStart     { type: "tool_start";    toolId: string; toolName: string }
@@ -646,12 +649,16 @@ function ResponsePathFooter({
   modelUsed,
   contextPrefetched,
   contextSource,
+  toolCount = 0,
+  durationMs,
 }: {
   baseMode: McpMode;
   path: ResponsePath;
   modelUsed?: string;
   contextPrefetched?: boolean;
   contextSource?: "mcp" | "rest" | "none";
+  toolCount?: number;
+  durationMs?: number;
 }) {
   const modelLabel = modelUsed ? (findModelByApiName(modelUsed)?.label ?? "Salesforce Models API") : undefined;
   const label = getRouteReceiptText({
@@ -661,6 +668,16 @@ function ResponsePathFooter({
     contextPrefetched,
     contextSource,
   });
+  const diagnostics = buildRouteDiagnostics({
+    baseMode,
+    path,
+    modelLabel,
+    contextPrefetched,
+    contextSource,
+    toolCount,
+    durationMs,
+  });
+  const rows = getRouteDiagnosticsRows(diagnostics);
 
   return (
     <div
@@ -686,7 +703,24 @@ function ResponsePathFooter({
       >
         Route
       </span>
-      <span>{label}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <span>{label}</span>
+        <div
+          style={{
+            marginTop: "3px",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "3px 8px",
+            color: "var(--color-ink-soft)",
+          }}
+        >
+          {rows.map((row) => (
+            <span key={row.label}>
+              {row.label}: <span style={{ color: "var(--color-ink-muted)" }}>{row.value}</span>
+            </span>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1221,7 +1255,7 @@ export default function ChatPanel({
           agentId: activeAgentProfile?.agentId,
         }),
       });
-      const data = await res.json() as { reply?: string; type?: string; choices?: AgentforceRecordChoice[]; results?: AgentforceResultGroup[]; summaries?: AgentforceAggregateSummary[]; render?: RenderDirective | null; error?: string };
+      const data = await res.json() as { reply?: string; type?: string; choices?: AgentforceRecordChoice[]; results?: AgentforceResultGroup[]; summaries?: AgentforceAggregateSummary[]; render?: RenderDirective | null; error?: string; durationMs?: number };
       if (!res.ok || data.error) throw new Error(data.error ?? "Agentforce request failed");
       if (data.render && onRender) onRender(data.render);
       setMessages((prev) => [...prev, {
@@ -1231,6 +1265,7 @@ export default function ChatPanel({
         choiceResolved: false,
         results: data.results,
         summaries: data.summaries,
+        routeDurationMs: data.durationMs,
         responseBaseMode: route?.baseMode ?? "agentforce",
         responsePath: route?.path ?? "default",
       }]);
@@ -1263,7 +1298,7 @@ export default function ChatPanel({
           agentId: activeAgentProfile?.agentId,
         }),
       });
-      const data = await res.json() as { reply?: string; type?: string; choices?: AgentforceRecordChoice[]; results?: AgentforceResultGroup[]; summaries?: AgentforceAggregateSummary[]; render?: RenderDirective | null; error?: string };
+      const data = await res.json() as { reply?: string; type?: string; choices?: AgentforceRecordChoice[]; results?: AgentforceResultGroup[]; summaries?: AgentforceAggregateSummary[]; render?: RenderDirective | null; error?: string; durationMs?: number };
       if (!res.ok || data.error) throw new Error(data.error ?? "Agentforce request failed");
       if (data.render && onRender) onRender(data.render);
       setMessages((prev) => [...prev, {
@@ -1273,6 +1308,7 @@ export default function ChatPanel({
         choiceResolved: false,
         results: data.results,
         summaries: data.summaries,
+        routeDurationMs: data.durationMs,
         responseBaseMode: parentMessage.responseBaseMode ?? "agentforce",
         responsePath: parentMessage.responsePath ?? "default",
       }]);
@@ -1337,7 +1373,7 @@ export default function ChatPanel({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ messages: outgoingMessages, accountContext: accountContextRef.current, trustLayerMode: true }),
           });
-          const data = await res.json() as { text?: string; modelUsed?: string; error?: string; contextPrefetched?: boolean; contextSource?: "mcp" | "rest" | "none" };
+          const data = await res.json() as { text?: string; modelUsed?: string; error?: string; contextPrefetched?: boolean; contextSource?: "mcp" | "rest" | "none"; durationMs?: number };
           if (!res.ok || data.error) {
             if (res.status === 401 || data.error === "SF_SESSION_EXPIRED") {
               setSessionExpired(true);
@@ -1352,6 +1388,7 @@ export default function ChatPanel({
               modelUsed: data.modelUsed,
               contextPrefetched: data.contextPrefetched,
               contextSource: data.contextSource,
+              routeDurationMs: data.durationMs,
               responseBaseMode: mcpMode,
               responsePath: "trust-layer",
             }]);
@@ -1462,6 +1499,7 @@ export default function ChatPanel({
                 followUps: followUps.length > 0 ? followUps : undefined,
                 consultedAgentforce: event.consultedAgentforce || undefined,
                 summaryAgentUsed: event.summaryAgentUsed || undefined,
+                routeDurationMs: event.durationMs,
                 responseBaseMode: mcpMode,
                 responsePath: "default",
               },
@@ -1899,6 +1937,8 @@ export default function ChatPanel({
                           modelUsed={m.modelUsed}
                           contextPrefetched={m.contextPrefetched}
                           contextSource={m.contextSource}
+                          toolCount={m.toolCalls?.length ?? 0}
+                          durationMs={m.routeDurationMs}
                         />
                       )}
                     </>
