@@ -84,6 +84,7 @@ test("route diagnostics identify Trust Layer answers", () => {
 
   assert.equal(diagnostics.dataLayer, "Salesforce REST");
   assert.equal(diagnostics.answerLayer, "GPT-4.1");
+  assert.equal(diagnostics.sourceLabel, "Salesforce REST");
   assert.equal(diagnostics.trustLayer, true);
   assert.equal(diagnostics.durationLabel, "840ms");
 });
@@ -102,15 +103,17 @@ test("route diagnostics identify Agentforce direct answers", () => {
 test("route diagnostics rows are display ready", () => {
   const rows = getRouteDiagnosticsRows(buildRouteDiagnostics({
     baseMode: "hosted",
-    path: "default",
+    path: "trust-layer",
+    contextSource: "mcp",
     toolCount: 2,
     durationMs: 2200,
   }));
 
   assert.deepEqual(rows, [
     { label: "Data", value: "Hosted MCP" },
-    { label: "Answer", value: "Claude" },
-    { label: "Trust", value: "No" },
+    { label: "Source", value: "MCP" },
+    { label: "Answer", value: "Salesforce Models API" },
+    { label: "Trust", value: "Yes" },
     { label: "Tools", value: "2" },
     { label: "Time", value: "2.2s" },
   ]);

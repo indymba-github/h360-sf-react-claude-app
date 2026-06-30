@@ -18,6 +18,10 @@ Thumbs.db
 # Logs
 *.log
 
+# Browser test artifacts
+dashboard/test-results/
+dashboard/playwright-report/
+
 # Salesforce CLI metadata
 .sf/
 .sfdx/

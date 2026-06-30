@@ -107,6 +107,7 @@ export interface RouteDiagnostics {
   baseMode: BaseMode;
   path: ResponsePath;
   dataLayer: string;
+  sourceLabel?: string;
   answerLayer: string;
   trustLayer: boolean;
   toolCount: number;
@@ -137,6 +138,15 @@ function getDataLayerLabel(baseMode: BaseMode, path: ResponsePath, contextSource
   return BASE_MODE_LABELS[baseMode];
 }
 
+function getSourceLabel(baseMode: BaseMode, path: ResponsePath, contextSource?: ContextSource): string | undefined {
+  const normalized = normalizeResponsePath(baseMode, path);
+  if (normalized !== "trust-layer") return undefined;
+  if (contextSource === "mcp") return "MCP";
+  if (contextSource === "rest") return "Salesforce REST";
+  if (contextSource === "none") return "None";
+  return BASE_MODE_LABELS[baseMode];
+}
+
 function getAnswerLayerLabel(baseMode: BaseMode, path: ResponsePath, modelLabel?: string): string {
   const normalized = normalizeResponsePath(baseMode, path);
 
@@ -158,6 +168,7 @@ export function buildRouteDiagnostics({
     baseMode,
     path: normalized,
     dataLayer: getDataLayerLabel(baseMode, normalized, contextSource),
+    ...(getSourceLabel(baseMode, normalized, contextSource) ? { sourceLabel: getSourceLabel(baseMode, normalized, contextSource) } : {}),
     answerLayer: getAnswerLayerLabel(baseMode, normalized, modelLabel),
     trustLayer: normalized === "trust-layer" || normalized === "agentforce-direct" || baseMode === "agentforce",
     toolCount,
@@ -168,6 +179,7 @@ export function buildRouteDiagnostics({
 export function getRouteDiagnosticsRows(diagnostics: RouteDiagnostics): RouteDiagnosticsRow[] {
   return [
     { label: "Data", value: diagnostics.dataLayer },
+    ...(diagnostics.sourceLabel ? [{ label: "Source", value: diagnostics.sourceLabel }] : []),
     { label: "Answer", value: diagnostics.answerLayer },
     { label: "Trust", value: diagnostics.trustLayer ? "Yes" : "No" },
     { label: "Tools", value: String(diagnostics.toolCount) },

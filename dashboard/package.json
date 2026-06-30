@@ -1,6 +1,6 @@
 {
   "name": "sf-ai-dashboard",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "description": "AI-powered CRM dashboard for Salesforce, powered by Claude and MCP",
   "license": "MIT",
   "private": true,
@@ -12,7 +12,8 @@
     "start": "next start",
     "lint": "next lint",
     "check-config": "node scripts/check-config.js",
-    "release:preflight": "node scripts/release-preflight.js"
+    "release:preflight": "node scripts/release-preflight.js",
+    "smoke": "playwright test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",
@@ -26,6 +27,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.0",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
