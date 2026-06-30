@@ -28,6 +28,7 @@ import {
   getRouteReceiptText,
   getSelectableResponsePaths,
   normalizeResponsePath,
+  type ContextSource,
   type ResponsePath,
 } from "@/lib/response-path";
 
@@ -67,7 +68,7 @@ interface Message {
   trustLayerMode?: boolean;
   modelUsed?: string;
   contextPrefetched?: boolean;
-  contextSource?: "mcp" | "rest" | "none";
+  contextSource?: ContextSource;
   routeDurationMs?: number;
   summaryAgentUsed?: boolean;
   responseBaseMode?: McpMode;
@@ -656,7 +657,7 @@ function ResponsePathFooter({
   path: ResponsePath;
   modelUsed?: string;
   contextPrefetched?: boolean;
-  contextSource?: "mcp" | "rest" | "none";
+  contextSource?: ContextSource;
   toolCount?: number;
   durationMs?: number;
 }) {
@@ -1373,7 +1374,7 @@ export default function ChatPanel({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ messages: outgoingMessages, accountContext: accountContextRef.current, trustLayerMode: true }),
           });
-          const data = await res.json() as { text?: string; modelUsed?: string; error?: string; contextPrefetched?: boolean; contextSource?: "mcp" | "rest" | "none"; durationMs?: number };
+          const data = await res.json() as { text?: string; modelUsed?: string; error?: string; contextPrefetched?: boolean; contextSource?: ContextSource; durationMs?: number };
           if (!res.ok || data.error) {
             if (res.status === 401 || data.error === "SF_SESSION_EXPIRED") {
               setSessionExpired(true);

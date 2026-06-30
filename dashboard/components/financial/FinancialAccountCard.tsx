@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { FinancialAccountWithRole } from "@/lib/financial-accounts";
 import { categorizeFinancialAccount } from "@/lib/financial-accounts";
+import { formatDate } from "@/lib/format";
 import FinancialAccountTransactions from "./FinancialAccountTransactions";
 
 interface Props {
@@ -22,8 +23,8 @@ const badge: React.CSSProperties = {
 
 const badgeSuccess: React.CSSProperties = {
   ...badge,
-  background: "rgba(45, 106, 79, 0.15)",
-  color: "#2D6A4F",
+  background: "color-mix(in srgb, var(--color-success) 14%, var(--color-surface))",
+  color: "var(--color-success)",
 };
 
 const badgeNeutral: React.CSSProperties = {
@@ -34,14 +35,14 @@ const badgeNeutral: React.CSSProperties = {
 
 const badgeRole: React.CSSProperties = {
   ...badge,
-  background: "rgba(160, 104, 0, 0.12)",
-  color: "#A06800",
+  background: "color-mix(in srgb, var(--color-warning) 12%, var(--color-surface))",
+  color: "var(--color-warning)",
 };
 
 const badgeInfo: React.CSSProperties = {
   ...badge,
-  background: "rgba(30, 64, 175, 0.10)",
-  color: "#1E40AF",
+  background: "color-mix(in srgb, var(--color-accent-text) 10%, var(--color-surface))",
+  color: "var(--color-accent-text)",
 };
 
 export default function FinancialAccountCard({ account }: Props) {
@@ -55,15 +56,6 @@ export default function FinancialAccountCard({ account }: Props) {
       currency: account.CurrencyIsoCode || "USD",
       maximumFractionDigits: 2,
     }).format(n);
-  };
-
-  const formatDate = (s: string | null) => {
-    if (!s) return null;
-    return new Date(s).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
   };
 
   const maskedAcctNumber = account.FinancialAccountNumber
@@ -89,14 +81,14 @@ export default function FinancialAccountCard({ account }: Props) {
           { label: "Rate", value: account.InterestRate !== null ? `${account.InterestRate}%` : null },
           { label: "Term", value: account.Term ? `${account.Term} mo` : null },
           { label: "Due", value: formatCurrency(account.AmountDue) },
-          { label: "Payment Due", value: formatDate(account.PaymentDueDate) },
-          { label: "Maturity", value: formatDate(account.MaturityDate) },
+          { label: "Payment Due", value: account.PaymentDueDate ? formatDate(account.PaymentDueDate) : null },
+          { label: "Maturity", value: account.MaturityDate ? formatDate(account.MaturityDate) : null },
         ].filter((f) => f.value !== null)
       : [];
 
   const depositFields =
     category === "Deposit"
-      ? [{ label: "Opened", value: formatDate(account.OpeningDate) }].filter(
+      ? [{ label: "Opened", value: account.OpeningDate ? formatDate(account.OpeningDate) : null }].filter(
           (f) => f.value !== null
         )
       : [];
@@ -105,7 +97,7 @@ export default function FinancialAccountCard({ account }: Props) {
     category === "Investment"
       ? [
           { label: "Managed", value: account.IsManaged ? "Yes" : "No" },
-          { label: "Opened", value: formatDate(account.OpeningDate) },
+          { label: "Opened", value: account.OpeningDate ? formatDate(account.OpeningDate) : null },
         ].filter((f) => f.value !== null)
       : [];
 

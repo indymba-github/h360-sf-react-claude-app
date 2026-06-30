@@ -49,6 +49,10 @@ test("route receipts explain the data and answer path", () => {
     "Salesforce REST prefetch gathered context -> Salesforce Models API answered through the Trust Layer",
   );
   assert.equal(
+    getRouteReceiptText({ baseMode: "hosted", path: "trust-layer", contextSource: "mcp+rest" }),
+    "Hosted MCP + Salesforce REST gathered context -> Salesforce Models API answered through the Trust Layer",
+  );
+  assert.equal(
     getRouteReceiptText({ baseMode: "hosted", path: "agentforce-direct" }),
     "Agentforce answered directly",
   );
@@ -116,5 +120,23 @@ test("route diagnostics rows are display ready", () => {
     { label: "Trust", value: "Yes" },
     { label: "Tools", value: "2" },
     { label: "Time", value: "2.2s" },
+  ]);
+});
+
+test("route diagnostics identify hybrid MCP and REST Trust Layer context", () => {
+  const rows = getRouteDiagnosticsRows(buildRouteDiagnostics({
+    baseMode: "hosted",
+    path: "trust-layer",
+    contextSource: "mcp+rest",
+    durationMs: 3600,
+  }));
+
+  assert.deepEqual(rows, [
+    { label: "Data", value: "Hosted MCP + Salesforce REST" },
+    { label: "Source", value: "MCP + Salesforce REST" },
+    { label: "Answer", value: "Salesforce Models API" },
+    { label: "Trust", value: "Yes" },
+    { label: "Tools", value: "0" },
+    { label: "Time", value: "3.6s" },
   ]);
 });

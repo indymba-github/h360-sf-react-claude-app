@@ -6,6 +6,27 @@ All notable project changes are documented here.
 
 - No unreleased changes yet.
 
+## v2.3.0 - 2026-06-30
+
+### Added
+
+- Added a deterministic Relationship Snapshot to account detail pages with relationship, growth, service, and coverage signals for FINS customer conversations.
+- Added focused preview helpers and tests for relationship snapshots, cases, contacts, opportunities, shared date formatting, financial account card theming, and Trust Layer financial-account context.
+- Added v2.3.0 design and implementation notes for the FINS relationship workspace.
+
+### Changed
+
+- Refined account detail sections so pipeline, contacts, financial accounts, and cases read as a more cohesive relationship workspace.
+- Updated Financial Account value semantics to separate asset balances, debt exposure, and credit exposure instead of treating all values as a generic balance.
+- Updated Trust Layer route diagnostics to identify hybrid MCP plus Salesforce REST context when REST financial-account context supplements MCP context.
+- Bumped dashboard package metadata to `2.3.0`.
+
+### Fixed
+
+- Fixed Relationship Snapshot copy that showed `Value unknown` when financial accounts existed but value fields were unavailable.
+- Fixed Trust Layer account answers missing financial-account context when Hosted MCP returned account context without Financial Accounts.
+- Fixed Salesforce date-only values shifting by using shared date formatting across account and financial account views.
+
 ## v2.2.3 - 2026-06-30
 
 ### Added

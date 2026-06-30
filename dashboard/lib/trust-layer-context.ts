@@ -20,7 +20,9 @@ import {
   type SFCase,
   type SFTask,
 } from "./salesforce";
-import type { FinancialAccountWithRole } from "./financial-accounts";
+import { categorizeFinancialAccount, type FinancialAccountWithRole } from "./financial-accounts";
+import { formatDate } from "./format";
+import type { ContextSource } from "./response-path";
 
 export type PrefetchedAccountContext = {
   accountSummary: string;
@@ -29,6 +31,11 @@ export type PrefetchedAccountContext = {
   contactsSummary: string;
   newsAlertsSummary: string;
   casesSummary: string;
+};
+
+export type TrustLayerCollectedContext = {
+  text: string;
+  source: ContextSource;
 };
 
 type SFAccountWithOwner = SFAccount & {
@@ -57,6 +64,31 @@ export async function prefetchAccountContext(
     contactsSummary: formatContactsSummary(contacts),
     newsAlertsSummary: formatNewsAlertsSummary(newsAlerts),
     casesSummary: formatCasesSummary(cases),
+  };
+}
+
+export async function prefetchFinancialAccountsContext(
+  accountId: string,
+  accessToken: string,
+  instanceUrl: string,
+): Promise<string> {
+  const financialAccounts = await getFinancialAccountsForAccount(instanceUrl, accessToken, accountId).catch(() => []);
+  return formatFinancialAccountsSummary(financialAccounts);
+}
+
+export function supplementTrustLayerMcpContext(
+  context: TrustLayerCollectedContext,
+  financialAccountsSummary: string,
+): TrustLayerCollectedContext {
+  const text = context.text.trim();
+  const supplementalText = financialAccountsSummary.trim();
+
+  if (context.source !== "mcp" || !text || !supplementalText) return context;
+  if (/(^|\n)FINANCIAL ACCOUNTS\b/i.test(text)) return context;
+
+  return {
+    text: `${text}\n\n---\n\nREST FINANCIAL ACCOUNT CONTEXT\n${supplementalText}`,
+    source: "mcp+rest",
   };
 }
 
@@ -111,18 +143,38 @@ function formatOpportunitiesSummary(opps: SFOpportunity[]): string {
   return lines.join("\n");
 }
 
-function formatFinancialAccountsSummary(accounts: FinancialAccountWithRole[]): string {
+export function formatFinancialAccountsSummary(accounts: FinancialAccountWithRole[]): string {
   if (accounts.length === 0) return "FINANCIAL ACCOUNTS\nNo financial accounts found.";
   const lines: string[] = ["FINANCIAL ACCOUNTS"];
   accounts.slice(0, 15).forEach((fa) => {
-    const balance = fa.CurrentBalance != null ? formatCurrency(fa.CurrentBalance) : "(no balance)";
     const name = fa.Name || "(unnamed)";
     const type = fa.Type || "Account";
     const role = fa.Role ? ` [${fa.Role}]` : "";
-    lines.push(`  • ${name} | ${type}${role} | ${balance}`);
+    lines.push(`  • ${name} | ${type}${role} | ${formatFinancialAccountValue(fa)}`);
   });
   if (accounts.length > 15) lines.push(`  ... and ${accounts.length - 15} more`);
   return lines.join("\n");
+}
+
+function formatFinancialAccountValue(account: FinancialAccountWithRole): string {
+  const category = categorizeFinancialAccount(account.Type);
+
+  if (category === "Deposit" || category === "Investment" || category === "Other") {
+    return account.CurrentBalance != null
+      ? `Asset balance: ${formatCurrency(account.CurrentBalance)}`
+      : "Value data unavailable";
+  }
+
+  if (category === "Lending") {
+    const exposure = account.TotalOutstandingAmount ?? account.PrincipalAmount ?? account.CurrentBalance;
+    return exposure != null ? `Debt exposure: ${formatCurrency(exposure)}` : "Value data unavailable";
+  }
+
+  const parts: string[] = [];
+  const debtExposure = account.TotalOutstandingAmount ?? account.CurrentBalance;
+  if (debtExposure != null) parts.push(`Debt exposure: ${formatCurrency(debtExposure)}`);
+  if (account.CreditLimit != null) parts.push(`Credit exposure: ${formatCurrency(account.CreditLimit)}`);
+  return parts.length > 0 ? parts.join("; ") : "Value data unavailable";
 }
 
 function formatContactsSummary(contacts: SFContact[]): string {
@@ -183,19 +235,6 @@ function formatCurrency(amount: number | null | undefined): string {
   if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(1)}M`;
   if (amount >= 1_000) return `$${(amount / 1_000).toFixed(0)}K`;
   return `$${amount.toFixed(0)}`;
-}
-
-function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return "(no date)";
-  try {
-    return new Date(dateStr).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  } catch {
-    return dateStr;
-  }
 }
 
 function truncate(str: string, max: number): string {

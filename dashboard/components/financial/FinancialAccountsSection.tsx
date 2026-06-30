@@ -16,27 +16,17 @@ interface Props {
 }
 
 export default function FinancialAccountsSection({ accounts }: Props) {
-  const sectionTitleStyle: React.CSSProperties = {
-    fontFamily: "var(--font-display)",
-    fontSize: 18,
-    fontWeight: 600,
-    color: "var(--color-ink)",
-    margin: "0 0 16px",
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-  };
-
   if (!accounts || accounts.length === 0) {
     return (
-      <div style={{ padding: "24px 0" }}>
-        <h3 style={sectionTitleStyle}>Financial Accounts</h3>
+      <div
+        className="px-5 py-8 text-center"
+        style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}
+      >
         <p
           style={{
             fontFamily: "var(--font-body)",
-            fontSize: 13,
+            fontSize: 12,
             color: "var(--color-ink-soft)",
-            fontStyle: "italic",
             margin: 0,
           }}
         >
@@ -54,24 +44,7 @@ export default function FinancialAccountsSection({ accounts }: Props) {
   }
 
   return (
-    <div style={{ padding: "24px 0" }}>
-      <h3 style={sectionTitleStyle}>
-        Financial Accounts
-        <span
-          style={{
-            fontFamily: "var(--font-body)",
-            fontSize: 12,
-            fontWeight: 500,
-            color: "var(--color-ink-soft)",
-            background: "var(--color-surface)",
-            padding: "2px 8px",
-            borderRadius: 10,
-          }}
-        >
-          {accounts.length}
-        </span>
-      </h3>
-
+    <div>
       {CATEGORY_ORDER.map((category) => {
         const items = grouped.get(category);
         if (!items || items.length === 0) return null;

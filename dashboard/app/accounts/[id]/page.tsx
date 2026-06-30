@@ -3,7 +3,12 @@ import { getSession } from "@/lib/session";
 import { getEffectiveMcpMode } from "@/lib/mcp-config";
 import { sfQuery, getAccount, getNewsAlerts, getFinancialAccountsForAccount, type SFOpportunity, type SFContact, type SFCase } from "@/lib/salesforce";
 import FinancialAccountsSection from "@/components/financial/FinancialAccountsSection";
-import { formatCurrency, formatCount } from "@/lib/format";
+import RelationshipSnapshotPanel from "@/components/account/RelationshipSnapshot";
+import { buildRelationshipSnapshot } from "@/lib/relationship-snapshot";
+import { buildCasePreview } from "@/lib/case-preview";
+import { buildOpportunityPreview } from "@/lib/opportunity-preview";
+import { buildContactPreview } from "@/lib/contact-preview";
+import { formatCurrency, formatCount, formatDate } from "@/lib/format";
 import PageHeading from "@/components/PageHeading";
 import AccountDetailClient from "./AccountDetailClient";
 import SectionHeader from "@/components/SectionHeader";
@@ -14,11 +19,6 @@ const NewsAlertsSection    = dynamic(() => import("@/components/NewsAlertsSectio
 const SalesforceLink       = dynamic(() => import("@/components/SalesforceLink"),       { ssr: false });
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) return "—";
-  return new Date(value).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
-}
 
 function stagePillStyle(stage: string): React.CSSProperties {
   const s = stage.toLowerCase();
@@ -81,7 +81,7 @@ export default async function AccountDetailPage({
     ),
     sfQuery<SFCase>(
       session.instanceUrl, session.accessToken,
-      `SELECT Id, CaseNumber, Subject, Status, Priority, CreatedDate FROM Case WHERE AccountId = '${safeId}' ORDER BY CreatedDate DESC LIMIT 5`
+      `SELECT Id, CaseNumber, Subject, Status, Priority, CreatedDate FROM Case WHERE AccountId = '${safeId}' ORDER BY CreatedDate DESC LIMIT 8`
     ),
     getNewsAlerts(session.instanceUrl, session.accessToken, safeId),
     getFinancialAccountsForAccount(session.instanceUrl, session.accessToken, safeId),
@@ -95,11 +95,21 @@ export default async function AccountDetailPage({
   const cases      = casesRes.status === "fulfilled" ? casesRes.value : [];
   const newsAlerts        = newsRes.status === "fulfilled" ? newsRes.value : [];
   const financialAccounts = financialAccountsRes.status === "fulfilled" ? financialAccountsRes.value : [];
+  const relationshipSnapshot = buildRelationshipSnapshot({
+    account: acct,
+    opportunities: opps,
+    contacts,
+    cases,
+    financialAccounts,
+  });
 
-  const openOpps   = opps.filter((o) => !o.StageName.toLowerCase().startsWith("closed"));
+  const opportunityPreview = buildOpportunityPreview(opps);
+  const openOpps   = opportunityPreview.openOpportunities;
   const openCases  = cases.filter((c) => c.Status !== "Closed");
   const closedCases = cases.filter((c) => c.Status === "Closed");
-  const openOppsTotal = openOpps.reduce((s, o) => s + (o.Amount ?? 0), 0);
+  const openOppsTotal = opportunityPreview.openPipelineTotal;
+  const casePreview = buildCasePreview(cases, 4);
+  const contactPreview = buildContactPreview(contacts);
 
   // Headline: split last word for italic
   const acctLastWord = lastWord(acct.Name);
@@ -180,6 +190,8 @@ export default async function AccountDetailPage({
             </div>
           )}
 
+          <RelationshipSnapshotPanel snapshot={relationshipSnapshot} />
+
           {/* Briefing chips */}
           <AccountBriefingPanel accountId={acct.Id} accountName={acct.Name} />
 
@@ -202,15 +214,36 @@ export default async function AccountDetailPage({
                 meta={openOpps.length > 0 ? `${formatCurrency(openOppsTotal)} across ${openOpps.length} opportunit${openOpps.length !== 1 ? "ies" : "y"}` : undefined}
               />
             </div>
-            {opps.length === 0 ? (
-              <EmptySection message="No open opportunities." />
+            {openOpps.length === 0 ? (
+              <div>
+                <EmptySection message="No open opportunities." />
+                {opportunityPreview.closedSummary && (
+                  <div
+                    className="px-5 py-3"
+                    style={{
+                      background: "var(--color-paper)",
+                      border: "0.5px solid var(--color-border)",
+                      borderTop: "none",
+                    }}
+                  >
+                    <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)" }}>
+                      {opportunityPreview.closedSummary}
+                    </p>
+                  </div>
+                )}
+              </div>
             ) : (
               <div style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
-                {opps.map((o, i) => (
+                {openOpps.map((o, i) => (
                   <div
                     key={o.Id}
                     className="flex items-center justify-between px-5 py-3"
-                    style={{ borderBottom: i < opps.length - 1 ? "0.5px solid var(--color-border)" : "none" }}
+                    style={{
+                      borderBottom:
+                        i < openOpps.length - 1 || opportunityPreview.closedSummary
+                          ? "0.5px solid var(--color-border)"
+                          : "none",
+                    }}
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <span
@@ -236,6 +269,13 @@ export default async function AccountDetailPage({
                     </div>
                   </div>
                 ))}
+                {opportunityPreview.closedSummary && (
+                  <div className="px-5 py-3" style={{ background: "var(--color-paper)" }}>
+                    <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)" }}>
+                      {opportunityPreview.closedSummary}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -246,58 +286,70 @@ export default async function AccountDetailPage({
               <SectionHeader
                 number="02"
                 title="Contacts"
-                meta={contacts.length > 0 ? `${contacts.length} on file` : undefined}
+                meta={
+                  contacts.length > 0
+                    ? `${contacts.length} on file · ${contactPreview.emailCoveragePercent}% email · ${contactPreview.phoneCoveragePercent}% phone`
+                    : undefined
+                }
               />
             </div>
             {contacts.length === 0 ? (
               <EmptySection message="No contacts on this account — add one from Salesforce." />
             ) : (
-              <div
-                className="grid grid-cols-1 gap-3"
-                style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}
-              >
-                {contacts.map((c) => (
+              <div>
+                {contactPreview.gapSummary && (
                   <div
-                    key={c.Id}
-                    style={{
-                      background: "var(--color-surface)",
-                      border: "0.5px solid var(--color-border)",
-                      padding: "11px 13px",
-                      position: "relative",
-                    }}
+                    className="px-4 py-3 mb-3"
+                    style={{ background: "var(--color-paper)", border: "0.5px solid var(--color-border)" }}
                   >
-                    <div style={{ position: "absolute", top: "10px", right: "10px" }}>
-                      <SalesforceLink instanceUrl={session.instanceUrl} recordId={c.Id} variant="icon" />
-                    </div>
-                    <p style={{ fontFamily: "var(--font-display)", fontSize: "13px", fontWeight: 500, color: "var(--color-ink)", marginBottom: "2px" }}>
-                      {c.Name}
+                    <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)" }}>
+                      {contactPreview.gapSummary}
                     </p>
-                    {(c.Title) && (
-                      <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-muted)", marginBottom: "6px" }}>
-                        {c.Title}
-                      </p>
-                    )}
-                    {c.Email && (
-                      <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)" }}>
-                        {c.Email}
-                      </p>
-                    )}
-                    {c.Phone && (
-                      <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)" }}>
-                        {c.Phone}
-                      </p>
-                    )}
                   </div>
-                ))}
+                )}
+                <div
+                  className="grid grid-cols-1 gap-3"
+                  style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}
+                >
+                  {contacts.map((c) => (
+                    <div
+                      key={c.Id}
+                      style={{
+                        background: "var(--color-surface)",
+                        border: "0.5px solid var(--color-border)",
+                        padding: "11px 13px",
+                        position: "relative",
+                      }}
+                    >
+                      <div style={{ position: "absolute", top: "10px", right: "10px" }}>
+                        <SalesforceLink instanceUrl={session.instanceUrl} recordId={c.Id} variant="icon" />
+                      </div>
+                      <p style={{ fontFamily: "var(--font-display)", fontSize: "13px", fontWeight: 500, color: "var(--color-ink)", marginBottom: "2px" }}>
+                        {c.Name}
+                      </p>
+                      {(c.Title) && (
+                        <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-muted)", marginBottom: "6px" }}>
+                          {c.Title}
+                        </p>
+                      )}
+                      <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: c.Email ? "var(--color-ink-soft)" : "var(--color-ink-muted)" }}>
+                        {c.Email ?? "No email on file"}
+                      </p>
+                      <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: c.Phone ? "var(--color-ink-soft)" : "var(--color-ink-muted)" }}>
+                        {c.Phone ?? "No phone on file"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
 
-          {/* 04 Financial Accounts */}
+          {/* 03 Financial Accounts */}
           <div className="mb-8">
             <div className="mb-4">
               <SectionHeader
-                number="04"
+                number="03"
                 title="Financial Accounts"
                 meta={financialAccounts.length > 0 ? `${financialAccounts.length} account${financialAccounts.length !== 1 ? "s" : ""}` : undefined}
               />
@@ -305,11 +357,11 @@ export default async function AccountDetailPage({
             <FinancialAccountsSection accounts={financialAccounts} />
           </div>
 
-          {/* 05 Cases */}
+          {/* 04 Cases */}
           <div className="mb-8">
             <div className="mb-4">
               <SectionHeader
-                number="05"
+                number="04"
                 title="Cases"
                 meta={cases.length > 0 ? `${openCases.length} open · ${closedCases.length} closed` : undefined}
               />
@@ -318,11 +370,16 @@ export default async function AccountDetailPage({
               <EmptySection message="No cases on file." />
             ) : (
               <div style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
-                {cases.slice(0, 3).map((c, i) => (
+                {casePreview.visibleCases.map((c, i) => (
                   <div
                     key={c.Id}
                     className="flex items-center justify-between px-5 py-3"
-                    style={{ borderBottom: i < Math.min(cases.length, 3) - 1 ? "0.5px solid var(--color-border)" : "none" }}
+                    style={{
+                      borderBottom:
+                        i < casePreview.visibleCases.length - 1 || casePreview.hiddenSummary
+                          ? "0.5px solid var(--color-border)"
+                          : "none",
+                    }}
                   >
                     <div>
                       <p style={{ fontFamily: "var(--font-display)", fontSize: "13px", fontWeight: 500, color: "var(--color-ink)" }}>
@@ -356,6 +413,13 @@ export default async function AccountDetailPage({
                     </div>
                   </div>
                 ))}
+                {casePreview.hiddenSummary && (
+                  <div className="px-5 py-3" style={{ background: "var(--color-paper)" }}>
+                    <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)" }}>
+                      {casePreview.hiddenSummary}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </div>

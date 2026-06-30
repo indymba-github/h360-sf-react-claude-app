@@ -19,7 +19,13 @@ import { getSettings } from "@/lib/settings";
 import { SF_MODELS_DEFAULT_API_NAME } from "@/lib/salesforce-models-catalog";
 import { isMcpAuthFailureMessage, shouldRefreshHostedMcpContext } from "@/lib/mcp-auth-errors";
 import { buildTrustLayerMcpCalls } from "@/lib/trust-layer-mcp-plan";
-import { prefetchAccountContext, formatPrefetchedContext } from "@/lib/trust-layer-context";
+import {
+  prefetchAccountContext,
+  prefetchFinancialAccountsContext,
+  formatPrefetchedContext,
+  supplementTrustLayerMcpContext,
+} from "@/lib/trust-layer-context";
+import type { ContextSource } from "@/lib/response-path";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -656,7 +662,7 @@ function extractPromptText(result: Awaited<ReturnType<Client["getPrompt"]>>): st
 
 interface TrustLayerContextCollection {
   text: string;
-  source: "mcp" | "rest" | "none";
+  source: ContextSource;
 }
 
 async function collectTrustLayerMcpContext({
@@ -749,6 +755,29 @@ async function collectTrustLayerContext({
   effectiveMode: McpMode;
   accountContext?: AccountContext;
 }): Promise<TrustLayerContextCollection> {
+  const supplementMcpContext = async (mcpContext: TrustLayerContextCollection) => {
+    if (!accountContext?.accountId) return mcpContext;
+
+    try {
+      const financialAccountsSummary = await prefetchFinancialAccountsContext(
+        accountContext.accountId,
+        accessToken,
+        instanceUrl,
+      );
+      const supplementedContext = supplementTrustLayerMcpContext(mcpContext, financialAccountsSummary);
+      if (supplementedContext.source === "mcp+rest") {
+        console.log("[chat] Trust Layer supplemented MCP context with REST financial accounts.");
+      }
+      return supplementedContext;
+    } catch (err) {
+      console.warn(
+        "[chat] Trust Layer REST financial account supplement failed; using MCP context only.",
+        err instanceof Error ? err.message : String(err),
+      );
+      return mcpContext;
+    }
+  };
+
   try {
     const mcpContext = await collectTrustLayerMcpContext({
       accessToken,
@@ -757,7 +786,7 @@ async function collectTrustLayerContext({
       effectiveMode,
       accountContext,
     });
-    if (mcpContext.text.trim()) return mcpContext;
+    if (mcpContext.text.trim()) return supplementMcpContext(mcpContext);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (shouldRefreshHostedMcpContext({
@@ -775,7 +804,7 @@ async function collectTrustLayerContext({
           effectiveMode,
           accountContext,
         });
-        if (refreshedContext.text.trim()) return refreshedContext;
+        if (refreshedContext.text.trim()) return supplementMcpContext(refreshedContext);
         console.warn("[chat] Trust Layer Hosted MCP retry completed but produced no context; falling back when possible.");
       } catch (refreshErr) {
         console.warn("[chat] Trust Layer Hosted MCP refresh/retry failed; falling back when possible:", refreshErr);

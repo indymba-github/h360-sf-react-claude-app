@@ -58,7 +58,7 @@ export function getResponsePathDetail(baseMode: BaseMode, path: ResponsePath): s
   return `${BASE_MODE_LABELS[baseMode]} provides Salesforce context to Claude.`;
 }
 
-export type ContextSource = "mcp" | "rest" | "none";
+export type ContextSource = "mcp" | "rest" | "mcp+rest" | "none";
 
 export interface RouteReceiptOptions {
   baseMode: BaseMode;
@@ -86,6 +86,10 @@ export function getRouteReceiptText({
 
     if (contextSource === "rest") {
       return `Salesforce REST prefetch gathered context -> ${model} answered through the Trust Layer`;
+    }
+
+    if (contextSource === "mcp+rest") {
+      return `${BASE_MODE_LABELS[baseMode]} + Salesforce REST gathered context -> ${model} answered through the Trust Layer`;
     }
 
     if (contextSource === "none" && !contextPrefetched) {
@@ -132,6 +136,7 @@ function getDataLayerLabel(baseMode: BaseMode, path: ResponsePath, contextSource
 
   if (normalized === "trust-layer") {
     if (contextSource === "rest") return "Salesforce REST";
+    if (contextSource === "mcp+rest") return `${BASE_MODE_LABELS[baseMode]} + Salesforce REST`;
     if (contextSource === "none") return "None";
   }
 
@@ -143,6 +148,7 @@ function getSourceLabel(baseMode: BaseMode, path: ResponsePath, contextSource?: 
   if (normalized !== "trust-layer") return undefined;
   if (contextSource === "mcp") return "MCP";
   if (contextSource === "rest") return "Salesforce REST";
+  if (contextSource === "mcp+rest") return "MCP + Salesforce REST";
   if (contextSource === "none") return "None";
   return BASE_MODE_LABELS[baseMode];
 }

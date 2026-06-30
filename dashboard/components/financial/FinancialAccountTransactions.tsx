@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { FinancialAccountTransaction } from "@/lib/financial-accounts";
+import { formatDate } from "@/lib/format";
 
 interface Props {
   financialAccountId: string;
@@ -48,15 +49,6 @@ export default function FinancialAccountTransactions({
       style: "currency",
       currency: accountCurrencyIso || "USD",
     }).format(n);
-  };
-
-  const formatDate = (s: string | null) => {
-    if (!s) return "";
-    return new Date(s).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
   };
 
   const listStyle: React.CSSProperties = {
