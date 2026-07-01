@@ -6,6 +6,21 @@ All notable project changes are documented here.
 
 - No unreleased changes yet.
 
+## v2.4.0 - 2026-07-01
+
+### Added
+
+- Added a Home command center with daily focus items, book-health metrics, and dashboard takeaways.
+- Added an Accounts directory cockpit with visible-book summary metrics, quick filters, and richer account card status.
+- Added deterministic helpers and tests for Home command-center and Accounts directory semantics.
+- Added v2.4.0 design and implementation notes for the Home and Accounts page updates.
+
+### Changed
+
+- Reworked the Home page so dashboards support an attention-first daily workflow instead of standing alone as generic charts.
+- Reworked the Accounts page to surface recent touch, stale/no-activity status, market, data gaps, and needs-attention signals.
+- Bumped dashboard package metadata to `2.4.0`.
+
 ## v2.3.0 - 2026-06-30
 
 ### Added

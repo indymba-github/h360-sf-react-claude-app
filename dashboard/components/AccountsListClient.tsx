@@ -1,8 +1,14 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type { SFAccount, AccountSortBy } from "@/lib/salesforce";
-import { formatCurrency, formatCount } from "@/lib/format";
+import {
+  buildAccountsDirectory,
+  filterAccountsDirectoryCards,
+  type AccountActivityTone,
+  type AccountDirectoryCard,
+  type AccountsQuickFilter,
+} from "@/lib/accounts-directory";
 import SalesforceLink from "@/components/SalesforceLink";
 
 interface Props {
@@ -25,7 +31,7 @@ function getStarred(): string[] {
 function StarButton({ accountId, starred, onToggle }: { accountId: string; starred: boolean; onToggle: (id: string) => void }) {
   return (
     <button
-      onClick={(e) => { e.preventDefault(); onToggle(accountId); }}
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggle(accountId); }}
       className="shrink-0 transition-opacity"
       style={{ color: starred ? "var(--color-accent)" : "var(--color-border)", opacity: starred ? 1 : 0 }}
       onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = "1"; }}
@@ -45,6 +51,137 @@ const SORT_LABELS: Record<AccountSortBy, string> = {
   "last-activity-desc": "Last activity (recent first)",
 };
 
+const QUICK_FILTERS: Array<{ id: AccountsQuickFilter; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "starred", label: "Starred" },
+  { id: "recent", label: "Recently touched" },
+  { id: "needs-attention", label: "Needs attention" },
+];
+
+function activityColor(tone: AccountActivityTone): string {
+  if (tone === "recent") return "var(--color-success)";
+  if (tone === "stale" || tone === "unknown") return "var(--color-danger)";
+  return "var(--color-ink-soft)";
+}
+
+function SummaryMetric({ label, value, detail, tone = "neutral" }: { label: string; value: string; detail: string; tone?: "neutral" | "good" | "watch" }) {
+  const color = tone === "good"
+    ? "var(--color-success)"
+    : tone === "watch"
+      ? "var(--color-danger)"
+      : "var(--color-ink)";
+
+  return (
+    <div style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)", padding: "11px 13px", minHeight: 92 }}>
+      <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--color-ink-soft)", marginBottom: 8 }}>
+        {label}
+      </p>
+      <p style={{ fontFamily: "var(--font-display)", fontSize: "22px", fontWeight: 500, color, lineHeight: 1 }}>
+        {value}
+      </p>
+      <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-muted)", lineHeight: 1.45, marginTop: 8 }}>
+        {detail}
+      </p>
+    </div>
+  );
+}
+
+function AccountFact({ label, value, tone }: { label: string; value: string; tone?: AccountActivityTone }) {
+  return (
+    <div>
+      <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-ink-soft)", marginBottom: "2px" }}>
+        {label}
+      </p>
+      <p style={{ fontFamily: "var(--font-display)", fontSize: "12px", fontWeight: 500, color: tone ? activityColor(tone) : "var(--color-ink)", lineHeight: 1.2 }}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function AccountCard({
+  card,
+  index,
+  instanceUrl,
+  onToggleStar,
+}: {
+  card: AccountDirectoryCard;
+  index: number;
+  instanceUrl?: string;
+  onToggleStar: (id: string) => void;
+}) {
+  const statusColor = card.needsAttention ? "var(--color-danger)" : activityColor(card.activityTone);
+
+  return (
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={() => { window.location.href = `/accounts/${card.id}`; }}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") window.location.href = `/accounts/${card.id}`; }}
+      className="group relative block transition-opacity hover:opacity-80"
+      style={{
+        background: "var(--color-surface)",
+        border: card.needsAttention
+          ? "0.5px solid color-mix(in srgb, var(--color-danger) 24%, var(--color-border))"
+          : "0.5px solid var(--color-border)",
+        padding: "11px 13px",
+        cursor: "pointer",
+        minHeight: 176,
+      }}
+    >
+      <div className="flex items-start justify-between mb-0.5">
+        <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--color-ink-soft)" }}>
+          {card.industryLabel}
+        </p>
+        <div className="flex items-center gap-2">
+          <span style={{ fontFamily: "var(--font-body)", fontSize: "9px", color: "var(--color-ink-soft)" }}>
+            {String(index + 1).padStart(2, "0")}
+          </span>
+          <div className={card.isStarred ? "" : "opacity-0 group-hover:opacity-100 transition-opacity"}>
+            <StarButton accountId={card.id} starred={card.isStarred} onToggle={onToggleStar} />
+          </div>
+          {instanceUrl && (
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+              <SalesforceLink instanceUrl={instanceUrl} recordId={card.id} variant="icon" />
+            </div>
+          )}
+        </div>
+      </div>
+
+      <p style={{ fontFamily: "var(--font-display)", fontSize: "15px", fontWeight: 500, color: "var(--color-ink)", margin: "2px 0 10px", lineHeight: 1.2 }}>
+        {card.name}
+      </p>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: "9px 14px",
+        }}
+      >
+        <AccountFact label="Market" value={card.marketLabel} />
+        <AccountFact label="Last touch" value={card.lastActivityLabel} tone={card.activityTone} />
+        <AccountFact label="Revenue" value={card.revenueLabel} />
+        <AccountFact label="Employees" value={card.employeesLabel} />
+      </div>
+
+      <p
+        style={{
+          fontFamily: "var(--font-body)",
+          fontSize: "10px",
+          lineHeight: 1.45,
+          color: statusColor,
+          marginTop: 12,
+          paddingTop: 9,
+          borderTop: "0.5px solid var(--color-border)",
+        }}
+      >
+        {card.statusLine}
+      </p>
+    </div>
+  );
+}
+
 export default function AccountsListClient({
   instanceUrl,
   initialAccounts,
@@ -58,6 +195,7 @@ export default function AccountsListClient({
   const [search, setSearch] = useState("");
   const [industry, setIndustry] = useState("all");
   const [sortBy, setSortBy] = useState<AccountSortBy>("name-asc");
+  const [quickFilter, setQuickFilter] = useState<AccountsQuickFilter>("all");
   const [isPending, setIsPending] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
@@ -149,6 +287,20 @@ export default function AccountsListClient({
 
   // Salesforce's OFFSET cap is 2000 — surface a hint rather than a broken button
   const atOffsetCap = sortBy !== "name-asc" && accounts.length >= 2000;
+  const directory = useMemo(
+    () => buildAccountsDirectory({ accounts, totalCount, starredIds: starred }),
+    [accounts, totalCount, starred],
+  );
+  const filteredCards = useMemo(
+    () => filterAccountsDirectoryCards(directory.cards, quickFilter),
+    [directory.cards, quickFilter],
+  );
+  const quickFilterCounts: Record<AccountsQuickFilter, number> = {
+    all: directory.cards.length,
+    starred: directory.cards.filter((card) => card.isStarred).length,
+    recent: directory.summary.recentlyTouchedCount,
+    "needs-attention": directory.summary.needsAttentionCount,
+  };
 
   const selectStyle: React.CSSProperties = {
     background: "var(--color-surface)",
@@ -162,6 +314,40 @@ export default function AccountsListClient({
 
   return (
     <>
+      {/* Directory summary */}
+      <div
+        className="mb-4"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+          gap: 6,
+        }}
+      >
+        <SummaryMetric
+          label="Directory"
+          value={directory.summary.totalCount.toLocaleString()}
+          detail={`${directory.summary.visibleCount.toLocaleString()} loaded in this view.`}
+        />
+        <SummaryMetric
+          label="Recently touched"
+          value={directory.summary.recentlyTouchedCount.toLocaleString()}
+          detail="Activity in the last 30 days."
+          tone={directory.summary.recentlyTouchedCount > 0 ? "good" : "neutral"}
+        />
+        <SummaryMetric
+          label="Needs attention"
+          value={directory.summary.needsAttentionCount.toLocaleString()}
+          detail="Stale activity or multiple data gaps."
+          tone={directory.summary.needsAttentionCount > 0 ? "watch" : "neutral"}
+        />
+        <SummaryMetric
+          label="Data gaps"
+          value={directory.summary.dataGapCount.toLocaleString()}
+          detail="Missing revenue, employees, or market."
+          tone={directory.summary.dataGapCount > 0 ? "watch" : "neutral"}
+        />
+      </div>
+
       {/* Search bar */}
       <div className="relative mb-3">
         <svg
@@ -200,8 +386,8 @@ export default function AccountsListClient({
         )}
       </div>
 
-      {/* Filters row + count */}
-      <div className="flex items-center gap-2 mb-6" style={{ flexWrap: "wrap" }}>
+      {/* Filters row */}
+      <div className="flex items-center gap-2 mb-3" style={{ flexWrap: "wrap" }}>
         <select
           value={industry}
           onChange={(e) => setIndustry(e.target.value)}
@@ -227,25 +413,52 @@ export default function AccountsListClient({
           className="ml-auto"
           style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--color-ink-soft)", whiteSpace: "nowrap" }}
         >
-          Showing {accounts.length.toLocaleString()} of {totalCount.toLocaleString()}
+          Showing {filteredCards.length.toLocaleString()} of {totalCount.toLocaleString()}
         </span>
       </div>
 
+      {/* Quick filters */}
+      <div className="flex items-center gap-1 mb-6" style={{ flexWrap: "wrap" }} role="group" aria-label="Account quick filters">
+        {QUICK_FILTERS.map((filter) => {
+          const active = quickFilter === filter.id;
+          return (
+            <button
+              key={filter.id}
+              type="button"
+              onClick={() => setQuickFilter(filter.id)}
+              aria-pressed={active}
+              style={{
+                padding: "4px 8px",
+                border: active ? "0.5px solid var(--color-accent)" : "0.5px solid var(--color-border)",
+                borderRadius: 4,
+                background: active ? "color-mix(in srgb, var(--color-accent) 9%, var(--color-surface))" : "var(--color-surface)",
+                color: active ? "var(--color-ink)" : "var(--color-ink-soft)",
+                fontFamily: "var(--font-body)",
+                fontSize: "10px",
+                cursor: "pointer",
+              }}
+            >
+              {filter.label} · {quickFilterCounts[filter.id].toLocaleString()}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Account grid */}
-      {accounts.length === 0 && !isPending ? (
+      {filteredCards.length === 0 && !isPending ? (
         <div className="flex flex-col items-center justify-center py-16 gap-3">
           <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1} style={{ color: "var(--color-ink-soft)" }}>
             <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
           </svg>
           <p style={{ fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-ink-soft)" }}>
-            No accounts match your search.
+            No accounts match this view.
           </p>
           <p style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--color-ink-muted)" }}>
-            Try a different keyword or industry filter.
+            Try a different keyword, industry, or quick filter.
           </p>
-          {(search || industry !== "all") && (
+          {(search || industry !== "all" || quickFilter !== "all") && (
             <button
-              onClick={() => { setSearch(""); setIndustry("all"); }}
+              onClick={() => { setSearch(""); setIndustry("all"); setQuickFilter("all"); }}
               style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-accent-text)", background: "none", border: "0.5px solid var(--color-border)", padding: "4px 12px", cursor: "pointer", marginTop: 4 }}
             >
               Clear filters
@@ -261,72 +474,15 @@ export default function AccountsListClient({
             transition: "opacity 150ms ease",
           }}
         >
-          {accounts.map((acct, idx) => {
-            const isStarred = starred.includes(acct.Id);
-            return (
-              <div
-                key={acct.Id}
-                role="link"
-                tabIndex={0}
-                onClick={() => { window.location.href = `/accounts/${acct.Id}`; }}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") window.location.href = `/accounts/${acct.Id}`; }}
-                className="group relative block transition-opacity hover:opacity-80"
-                style={{
-                  background: "var(--color-surface)",
-                  border: "0.5px solid var(--color-border)",
-                  padding: "11px 13px",
-                  cursor: "pointer",
-                }}
-              >
-                {/* Industry tag + index + star + SF link */}
-                <div className="flex items-start justify-between mb-0.5">
-                  {acct.Industry ? (
-                    <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--color-ink-soft)" }}>
-                      {acct.Industry}
-                    </p>
-                  ) : <span />}
-                  <div className="flex items-center gap-2">
-                    <span style={{ fontFamily: "var(--font-body)", fontSize: "9px", color: "var(--color-ink-soft)" }}>
-                      {String(idx + 1).padStart(2, "0")}
-                    </span>
-                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                      <StarButton accountId={acct.Id} starred={isStarred} onToggle={toggleStar} />
-                    </div>
-                    {instanceUrl && (
-                      <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                        <SalesforceLink instanceUrl={instanceUrl} recordId={acct.Id} variant="icon" />
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <p style={{ fontFamily: "var(--font-display)", fontSize: "15px", fontWeight: 500, color: "var(--color-ink)", margin: "2px 0 8px", lineHeight: 1.2 }}>
-                  {acct.Name}
-                </p>
-
-                <div className="flex gap-4">
-                  {acct.AnnualRevenue != null && (
-                    <div>
-                      <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-ink-soft)", marginBottom: "1px" }}>Revenue</p>
-                      <p style={{ fontFamily: "var(--font-display)", fontSize: "12px", fontWeight: 500, color: "var(--color-ink)" }}>{formatCurrency(acct.AnnualRevenue)}</p>
-                    </div>
-                  )}
-                  {acct.NumberOfEmployees != null && (
-                    <div>
-                      <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-ink-soft)", marginBottom: "1px" }}>Employees</p>
-                      <p style={{ fontFamily: "var(--font-display)", fontSize: "12px", fontWeight: 500, color: "var(--color-ink)" }}>{formatCount(acct.NumberOfEmployees)}</p>
-                    </div>
-                  )}
-                  {acct.BillingState && (
-                    <div>
-                      <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-ink-soft)", marginBottom: "1px" }}>Region</p>
-                      <p style={{ fontFamily: "var(--font-display)", fontSize: "12px", fontWeight: 500, color: "var(--color-ink)" }}>{acct.BillingState}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          {filteredCards.map((card, idx) => (
+            <AccountCard
+              key={card.id}
+              card={card}
+              index={idx}
+              instanceUrl={instanceUrl}
+              onToggleStar={toggleStar}
+            />
+          ))}
         </div>
       )}
 

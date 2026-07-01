@@ -2,9 +2,10 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { getEffectiveMcpMode } from "@/lib/mcp-config";
 import { sfQuery, getNewsAlerts, getPipelineSummary } from "@/lib/salesforce";
-import { formatCurrency, formatCount } from "@/lib/format";
 import { timeOfDayGreeting } from "@/lib/greeting";
+import { buildHomeCommandCenter } from "@/lib/home-command-center";
 import ChatPanel from "@/components/ChatPanel";
+import HomeCommandCenter from "@/components/home/HomeCommandCenter";
 import PageHeading from "@/components/PageHeading";
 import SectionHeader from "@/components/SectionHeader";
 import dynamic from "next/dynamic";
@@ -185,29 +186,6 @@ function buildAgendaItems(tasks: SFTaskItem[], events: SFEvent[]): AgendaItem[] 
   return [...timedEvents, ...allDayEvents, ...taskItems];
 }
 
-// ── KPI card ───────────────────────────────────────────────────────────────
-
-function KpiCard({ marker, label, value }: { marker: string; label: string; value: string }) {
-  return (
-    <div
-      className="p-[11px_13px]"
-      style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}
-    >
-      <div className="flex items-baseline justify-between mb-2">
-        <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--color-ink-soft)" }}>
-          {label}
-        </p>
-        <span style={{ fontFamily: "var(--font-body)", fontSize: "9px", color: "var(--color-ink-soft)" }}>
-          {marker}
-        </span>
-      </div>
-      <p style={{ fontFamily: "var(--font-display)", fontSize: "24px", fontWeight: 500, color: "var(--color-ink)", lineHeight: 1 } as React.CSSProperties}>
-        {value}
-      </p>
-    </div>
-  );
-}
-
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default async function DashboardPage() {
@@ -271,6 +249,37 @@ export default async function DashboardPage() {
   const forecastBuckets = buildForecastBuckets(agingOppRows);
   const agingOpps = buildAgingOpps(agingOppRows);
   const agendaItems = buildAgendaItems(tasks, events);
+  const homeCommandCenter = buildHomeCommandCenter({
+    accountCount,
+    openPipelineAmount: pipeline?.totalOpenAmount ?? null,
+    openPipelineCount: pipeline?.totalOpen ?? null,
+    winRate,
+    modifiedThisWeek,
+    highPriorityCases: cases.map((c) => ({
+      id: c.Id,
+      subject: c.Subject,
+      accountId: c.Account?.Id ?? null,
+      accountName: c.Account?.Name ?? null,
+      status: c.Status,
+      createdDate: c.CreatedDate,
+    })),
+    recentAccounts: recent.map((a) => ({
+      id: a.Id,
+      name: a.Name,
+      industry: a.Industry,
+      lastModifiedDate: a.LastModifiedDate,
+    })),
+    agendaItems: agendaItems.map((item) => ({
+      id: item.id,
+      type: item.type,
+      subject: item.subject,
+      relatedName: item.whatName ?? item.whoName ?? null,
+      relatedId: item.whatId,
+    })),
+    agingOpportunities: agingOpps,
+    forecastBuckets,
+    pipelineStages,
+  });
 
   return (
     <div className="flex h-full">
@@ -288,25 +297,22 @@ export default async function DashboardPage() {
             />
           </div>
 
-          {/* News Alerts (between heading and KPI grid) */}
+          {/* Daily command center */}
+          <div className="mb-10">
+            <HomeCommandCenter summary={homeCommandCenter} />
+          </div>
+
+          {/* News Alerts */}
           {newsAlerts.length > 0 && (
             <div className="mb-8">
               <NewsAlertsSection initialAlerts={newsAlerts} variant="dashboard" />
             </div>
           )}
 
-          {/* KPI grid */}
-          <div className="grid gap-[6px] mb-10" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-            <KpiCard marker="01" label="Accounts"      value={formatCount(accountCount)} />
-            <KpiCard marker="02" label="Open pipeline" value={formatCurrency(pipeline?.totalOpenAmount ?? null)} />
-            <KpiCard marker="03" label="Open deals"    value={formatCount(pipeline?.totalOpen ?? null)} />
-            <KpiCard marker="04" label="Win rate"      value={winRate !== null ? `${winRate}%` : "—"} />
-          </div>
-
           {/* ── 01 Pipeline view ── */}
           <div className="mb-10">
             <div className="mb-4">
-              <SectionHeader number="01" title="Pipeline view" />
+              <SectionHeader number="01" title="Pipeline dashboard" />
             </div>
 
             {/* Row 1: Pipeline by Stage — full width */}
