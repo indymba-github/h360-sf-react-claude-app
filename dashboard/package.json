@@ -1,6 +1,6 @@
 {
   "name": "sf-ai-dashboard",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "AI-powered CRM dashboard for Salesforce, powered by Claude and MCP",
   "license": "MIT",
   "private": true,

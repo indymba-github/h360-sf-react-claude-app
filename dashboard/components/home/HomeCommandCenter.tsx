@@ -161,33 +161,6 @@ function HealthMetric({ metric }: { metric: HomeCommandCenterModel["healthMetric
   );
 }
 
-function Takeaway({ takeaway }: { takeaway: HomeCommandCenterModel["takeaways"][number] }) {
-  return (
-    <div style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)", padding: "11px 13px", minHeight: 88 }}>
-      <p
-        style={{
-          fontFamily: "var(--font-body)",
-          fontSize: "9px",
-          letterSpacing: "0.14em",
-          textTransform: "uppercase",
-          color: "var(--color-ink-soft)",
-          marginBottom: 7,
-        }}
-      >
-        {takeaway.label}
-      </p>
-      <div style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
-        <p style={{ fontFamily: "var(--font-display)", fontSize: "20px", lineHeight: 1, color: "var(--color-ink)", minWidth: 58 }}>
-          {takeaway.value}
-        </p>
-        <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", lineHeight: 1.45, color: "var(--color-ink-muted)" }}>
-          {takeaway.detail}
-        </p>
-      </div>
-    </div>
-  );
-}
-
 export default function HomeCommandCenter({ summary }: { summary: HomeCommandCenterModel }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
@@ -217,21 +190,6 @@ export default function HomeCommandCenter({ summary }: { summary: HomeCommandCen
         >
           {summary.healthMetrics.map((metric) => (
             <HealthMetric key={metric.id} metric={metric} />
-          ))}
-        </div>
-      </section>
-
-      <section>
-        <SectionKicker>Dashboard takeaways</SectionKicker>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-            gap: 6,
-          }}
-        >
-          {summary.takeaways.map((takeaway) => (
-            <Takeaway key={takeaway.id} takeaway={takeaway} />
           ))}
         </div>
       </section>

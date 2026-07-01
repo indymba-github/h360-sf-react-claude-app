@@ -6,6 +6,27 @@ All notable project changes are documented here.
 
 - No unreleased changes yet.
 
+## v2.5.0 - 2026-07-01
+
+### Added
+
+- Added a Home relationship dashboard focused on pipeline allocation, relationship coverage, service pressure, and next relationship actions.
+- Added deterministic Home relationship dashboard helpers and tests.
+- Added Accounts worklist context for needs-attention relationships, including visible reason chips and next-move guidance.
+- Added URL-addressable Accounts state for quick filter, search, industry, and sort selections.
+- Added v2.5.0 design and implementation notes for the Home relationship dashboard work.
+
+### Changed
+
+- Reworked the Home pipeline chart from a stage amount list into a compact allocation donut with stage details in tooltips.
+- Reworked Accounts cards so they read as relationship-management work items instead of generic directory cards.
+- Removed the visible Home dashboard takeaways block that duplicated the replaced forecast and aging chart concepts.
+- Bumped dashboard package metadata to `2.5.0`.
+
+### Fixed
+
+- Fixed Accounts hydration mismatches when opening URL-filtered worklist views from Home next actions.
+
 ## v2.4.0 - 2026-07-01
 
 ### Added

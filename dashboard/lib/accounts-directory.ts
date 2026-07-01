@@ -1,7 +1,10 @@
 import { formatCount, formatCurrency, formatDate } from "./format";
-import type { SFAccount } from "./salesforce";
+import type { AccountSortBy, SFAccount } from "./salesforce";
 
 export type AccountsQuickFilter = "all" | "starred" | "recent" | "needs-attention";
+
+const ACCOUNTS_QUICK_FILTERS: AccountsQuickFilter[] = ["all", "starred", "recent", "needs-attention"];
+const ACCOUNT_SORT_OPTIONS: AccountSortBy[] = ["name-asc", "revenue-desc", "last-activity-desc"];
 
 export type AccountActivityTone = "recent" | "current" | "stale" | "unknown";
 
@@ -15,6 +18,8 @@ export type AccountDirectoryCard = {
   lastActivityLabel: string;
   activityTone: AccountActivityTone;
   statusLine: string;
+  attentionReasons: string[];
+  relationshipAction: string;
   dataGaps: string[];
   needsAttention: boolean;
   isRecentlyTouched: boolean;
@@ -43,8 +48,50 @@ export type AccountsDirectoryInput = {
   now?: Date;
 };
 
+export type AccountsDirectoryQueryState = {
+  filter: AccountsQuickFilter;
+  sortBy: AccountSortBy;
+  search: string;
+  industry: string;
+};
+
 const RECENT_DAYS = 30;
 const STALE_DAYS = 90;
+
+export function normalizeAccountsQuickFilter(value: string | string[] | null | undefined): AccountsQuickFilter {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  return ACCOUNTS_QUICK_FILTERS.includes(candidate as AccountsQuickFilter)
+    ? candidate as AccountsQuickFilter
+    : "all";
+}
+
+function firstParam(value: string | string[] | null | undefined): string {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function normalizeAccountSort(value: string | string[] | null | undefined): AccountSortBy {
+  const candidate = firstParam(value);
+  return ACCOUNT_SORT_OPTIONS.includes(candidate as AccountSortBy)
+    ? candidate as AccountSortBy
+    : "name-asc";
+}
+
+export function normalizeAccountsDirectoryQuery(searchParams: {
+  filter?: string | string[];
+  sortBy?: string | string[];
+  search?: string | string[];
+  industry?: string | string[];
+} = {}): AccountsDirectoryQueryState {
+  const search = firstParam(searchParams.search).trim();
+  const industry = firstParam(searchParams.industry).trim();
+
+  return {
+    filter: normalizeAccountsQuickFilter(searchParams.filter),
+    sortBy: normalizeAccountSort(searchParams.sortBy),
+    search,
+    industry: industry.length > 0 ? industry : "all",
+  };
+}
 
 function parseSalesforceDate(value: string | null | undefined): Date | null {
   if (!value) return null;
@@ -97,6 +144,23 @@ function buildStatusLine({
   return `Last touch ${lastActivityLabel}.`;
 }
 
+function buildAttentionReasons(activityTone: AccountActivityTone, dataGaps: string[]): string[] {
+  const reasons: string[] = [];
+  if (activityTone === "unknown") reasons.push("No activity");
+  if (activityTone === "stale") reasons.push("Stale activity");
+  for (const gap of dataGaps) reasons.push(`Missing ${gap.toLowerCase()}`);
+  return reasons;
+}
+
+function buildRelationshipAction(activityTone: AccountActivityTone, dataGaps: string[]): string {
+  const hasActivityRisk = activityTone === "unknown" || activityTone === "stale";
+  if (hasActivityRisk && dataGaps.length > 0) return "Schedule outreach and fill key account gaps.";
+  if (hasActivityRisk) return "Schedule the next relationship touch.";
+  if (dataGaps.length > 0) return "Fill account context before the next conversation.";
+  if (activityTone === "recent") return "Review recent movement and decide the next step.";
+  return "Keep relationship context current.";
+}
+
 function buildCard(account: SFAccount, starredIds: Set<string>, now: Date): AccountDirectoryCard {
   const activityDays = daysSince(account.LastActivityDate, now);
   const activityTone = getActivityTone(activityDays);
@@ -114,6 +178,8 @@ function buildCard(account: SFAccount, starredIds: Set<string>, now: Date): Acco
     lastActivityLabel,
     activityTone,
     statusLine: buildStatusLine({ activityTone, lastActivityLabel, dataGaps }),
+    attentionReasons: buildAttentionReasons(activityTone, dataGaps),
+    relationshipAction: buildRelationshipAction(activityTone, dataGaps),
     dataGaps,
     needsAttention,
     isRecentlyTouched: activityTone === "recent",

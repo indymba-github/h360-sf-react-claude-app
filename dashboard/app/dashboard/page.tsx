@@ -3,19 +3,16 @@ import { getSession } from "@/lib/session";
 import { getEffectiveMcpMode } from "@/lib/mcp-config";
 import { sfQuery, getNewsAlerts, getPipelineSummary } from "@/lib/salesforce";
 import { timeOfDayGreeting } from "@/lib/greeting";
-import { buildHomeCommandCenter } from "@/lib/home-command-center";
+import { buildHomeCommandCenter, type HomeAgingOpportunitySignal, type HomeForecastBucket } from "@/lib/home-command-center";
+import { buildHomeRelationshipDashboard } from "@/lib/home-relationship-dashboard";
 import ChatPanel from "@/components/ChatPanel";
 import HomeCommandCenter from "@/components/home/HomeCommandCenter";
+import HomeRelationshipDashboard from "@/components/home/HomeRelationshipDashboard";
 import PageHeading from "@/components/PageHeading";
 import SectionHeader from "@/components/SectionHeader";
 import dynamic from "next/dynamic";
 import type { AgendaItem } from "@/components/TodaysAgenda";
-import type { AgingOpportunity } from "@/components/AgingPipelineChart";
-import type { ForecastBucket } from "@/components/ForecastChart";
 
-const PipelineChart       = dynamic(() => import("@/components/PipelineChart"),       { ssr: false });
-const ForecastChart       = dynamic(() => import("@/components/ForecastChart"),       { ssr: false });
-const AgingPipelineChart  = dynamic(() => import("@/components/AgingPipelineChart"),  { ssr: false });
 const NewsAlertsSection   = dynamic(() => import("@/components/NewsAlertsSection"),   { ssr: false });
 const TodaysAgenda        = dynamic(() => import("@/components/TodaysAgenda"),        { ssr: false });
 const ClickableSignalCard = dynamic(() => import("@/components/ClickableSignalCard"), { ssr: false });
@@ -105,7 +102,12 @@ function countModifiedThisWeek(accounts: RecentAccount[]): number {
   return accounts.filter((a) => new Date(a.LastModifiedDate).getTime() > weekAgo).length;
 }
 
-function buildForecastBuckets(opps: AgingOppRow[]): ForecastBucket[] {
+function daysAgoDateLiteral(days: number): string {
+  const date = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  return date.toISOString().slice(0, 10);
+}
+
+function buildForecastBuckets(opps: AgingOppRow[]): HomeForecastBucket[] {
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const endOfMonth   = new Date(now.getFullYear(), now.getMonth() + 1, 0);
@@ -114,7 +116,7 @@ function buildForecastBuckets(opps: AgingOppRow[]): ForecastBucket[] {
   const plus30       = new Date(now.getTime() + 30 * 86400000);
   const plus60       = new Date(now.getTime() + 60 * 86400000);
 
-  const buckets: ForecastBucket[] = [
+  const buckets: HomeForecastBucket[] = [
     { label: "This month", range: `${startOfMonth.toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${endOfMonth.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, amount: 0, count: 0 },
     { label: "Next month", range: `${startOfNext.toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${endOfNext.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, amount: 0, count: 0 },
     { label: "60 days",    range: `${plus30.toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${plus60.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, amount: 0, count: 0 },
@@ -133,7 +135,7 @@ function buildForecastBuckets(opps: AgingOppRow[]): ForecastBucket[] {
   return buckets;
 }
 
-function buildAgingOpps(opps: AgingOppRow[]): AgingOpportunity[] {
+function buildAgingOpps(opps: AgingOppRow[]): HomeAgingOpportunitySignal[] {
   const now = Date.now();
   return opps
     .map(o => ({
@@ -194,9 +196,11 @@ export default async function DashboardPage() {
 
   const effectiveMcpMode = getEffectiveMcpMode(session.mcpMode);
   const userId = (session.userId ?? "").replace(/['"\\]/g, "");
+  const touchedSince = daysAgoDateLiteral(30);
+  const staleBefore = daysAgoDateLiteral(90);
 
   const [
-    pipelineRes, recentRes, casesRes, accountCountRes, winLossRes,
+    pipelineRes, recentRes, casesRes, accountCountRes, recentCoverageRes, staleCoverageRes, winLossRes,
     newsRes, pipelineStagesRes, agingOppsRes, eventsRes, tasksRes,
   ] = await Promise.allSettled([
     sfQuery<PipelineRollup>(session.instanceUrl, session.accessToken,
@@ -207,6 +211,10 @@ export default async function DashboardPage() {
       `SELECT Id, Subject, Priority, Status, Account.Id, Account.Name, CreatedDate FROM Case WHERE Status != 'Closed' AND Priority = 'High' ORDER BY CreatedDate DESC LIMIT 3`),
     sfQuery<AccountCountRow>(session.instanceUrl, session.accessToken,
       `SELECT COUNT(Id) total FROM Account WHERE OwnerId = '${userId}'`),
+    sfQuery<AccountCountRow>(session.instanceUrl, session.accessToken,
+      `SELECT COUNT(Id) total FROM Account WHERE OwnerId = '${userId}' AND LastActivityDate >= ${touchedSince}`),
+    sfQuery<AccountCountRow>(session.instanceUrl, session.accessToken,
+      `SELECT COUNT(Id) total FROM Account WHERE OwnerId = '${userId}' AND (LastActivityDate = null OR LastActivityDate < ${staleBefore})`),
     sfQuery<WinLossRow>(session.instanceUrl, session.accessToken,
       `SELECT StageName, COUNT(Id) cnt FROM Opportunity WHERE IsClosed = true AND OwnerId = '${userId}' GROUP BY StageName`),
     getNewsAlerts(session.instanceUrl, session.accessToken),
@@ -223,6 +231,8 @@ export default async function DashboardPage() {
   const recent        = recentRes.status === "fulfilled" ? recentRes.value : [];
   const cases         = casesRes.status === "fulfilled" ? casesRes.value : [];
   const accountCount  = accountCountRes.status === "fulfilled" ? (accountCountRes.value[0]?.total ?? 0) : 0;
+  const recentlyTouchedRaw = recentCoverageRes.status === "fulfilled" ? (recentCoverageRes.value[0]?.total ?? 0) : null;
+  const staleAccountCount = staleCoverageRes.status === "fulfilled" ? (staleCoverageRes.value[0]?.total ?? 0) : 0;
   const winLossRows   = winLossRes.status === "fulfilled" ? winLossRes.value : [];
   const newsAlerts    = newsRes.status === "fulfilled" ? newsRes.value : [];
   const pipelineStages = pipelineStagesRes.status === "fulfilled" ? pipelineStagesRes.value : [];
@@ -235,6 +245,7 @@ export default async function DashboardPage() {
   const winRate  = won + lost > 0 ? Math.round((won / (won + lost)) * 100) : null;
 
   const modifiedThisWeek = countModifiedThisWeek(recent);
+  const recentlyTouchedCount = recentlyTouchedRaw ?? modifiedThisWeek;
   const firstName  = session.displayName?.split(" ")[0] ?? "there";
   const greeting   = timeOfDayGreeting();
   const dateLabel  = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
@@ -249,36 +260,48 @@ export default async function DashboardPage() {
   const forecastBuckets = buildForecastBuckets(agingOppRows);
   const agingOpps = buildAgingOpps(agingOppRows);
   const agendaItems = buildAgendaItems(tasks, events);
+  const highPriorityCaseSignals = cases.map((c) => ({
+    id: c.Id,
+    subject: c.Subject,
+    accountId: c.Account?.Id ?? null,
+    accountName: c.Account?.Name ?? null,
+    status: c.Status,
+    createdDate: c.CreatedDate,
+  }));
+  const recentAccountSignals = recent.map((a) => ({
+    id: a.Id,
+    name: a.Name,
+    industry: a.Industry,
+    lastModifiedDate: a.LastModifiedDate,
+  }));
+  const agendaSignals = agendaItems.map((item) => ({
+    id: item.id,
+    type: item.type,
+    subject: item.subject,
+    relatedName: item.whatName ?? item.whoName ?? null,
+    relatedId: item.whatId,
+  }));
   const homeCommandCenter = buildHomeCommandCenter({
     accountCount,
     openPipelineAmount: pipeline?.totalOpenAmount ?? null,
     openPipelineCount: pipeline?.totalOpen ?? null,
     winRate,
     modifiedThisWeek,
-    highPriorityCases: cases.map((c) => ({
-      id: c.Id,
-      subject: c.Subject,
-      accountId: c.Account?.Id ?? null,
-      accountName: c.Account?.Name ?? null,
-      status: c.Status,
-      createdDate: c.CreatedDate,
-    })),
-    recentAccounts: recent.map((a) => ({
-      id: a.Id,
-      name: a.Name,
-      industry: a.Industry,
-      lastModifiedDate: a.LastModifiedDate,
-    })),
-    agendaItems: agendaItems.map((item) => ({
-      id: item.id,
-      type: item.type,
-      subject: item.subject,
-      relatedName: item.whatName ?? item.whoName ?? null,
-      relatedId: item.whatId,
-    })),
+    highPriorityCases: highPriorityCaseSignals,
+    recentAccounts: recentAccountSignals,
+    agendaItems: agendaSignals,
     agingOpportunities: agingOpps,
     forecastBuckets,
     pipelineStages,
+  });
+  const relationshipDashboard = buildHomeRelationshipDashboard({
+    accountCount,
+    recentlyTouchedCount,
+    staleAccountCount,
+    pipelineStages,
+    highPriorityCases: highPriorityCaseSignals,
+    recentAccounts: recentAccountSignals,
+    agendaItems: agendaSignals,
   });
 
   return (
@@ -309,35 +332,12 @@ export default async function DashboardPage() {
             </div>
           )}
 
-          {/* ── 01 Pipeline view ── */}
+          {/* ── 01 Relationship view ── */}
           <div className="mb-10">
             <div className="mb-4">
-              <SectionHeader number="01" title="Pipeline dashboard" />
+              <SectionHeader number="01" title="Relationship dashboard" />
             </div>
-
-            {/* Row 1: Pipeline by Stage — full width */}
-            <div className="mb-4" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)", padding: "16px 20px" }}>
-              <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-ink-soft)", marginBottom: 12 }}>
-                Pipeline by Stage
-              </p>
-              <PipelineChart stages={pipelineStages} />
-            </div>
-
-            {/* Row 2: Forecast + Aging side by side (stacks below 1200px) */}
-            <div style={{ display: "grid", gap: 4 }} className="pipeline-row-2" data-cols="2">
-              <div style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)", padding: "16px 20px" }}>
-                <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-ink-soft)", marginBottom: 12 }}>
-                  Forecast by Close Date
-                </p>
-                <ForecastChart buckets={forecastBuckets} />
-              </div>
-              <div style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)", padding: "16px 20px" }}>
-                <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-ink-soft)", marginBottom: 12 }}>
-                  Aging Pipeline
-                </p>
-                <AgingPipelineChart opportunities={agingOpps} instanceUrl={session.instanceUrl} />
-              </div>
-            </div>
+            <HomeRelationshipDashboard summary={relationshipDashboard} pipelineStages={pipelineStages} />
           </div>
 
           {/* ── 02 Intelligence queue ── */}

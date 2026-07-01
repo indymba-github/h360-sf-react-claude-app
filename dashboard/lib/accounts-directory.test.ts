@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildAccountsDirectory, filterAccountsDirectoryCards } from "./accounts-directory";
+import {
+  buildAccountsDirectory,
+  filterAccountsDirectoryCards,
+  normalizeAccountsDirectoryQuery,
+  normalizeAccountsQuickFilter,
+} from "./accounts-directory";
 import type { SFAccount } from "./salesforce";
 
 function account(overrides: Partial<SFAccount>): SFAccount {
@@ -95,6 +100,12 @@ test("buildAccountsDirectory creates display metadata for account cards", () => 
   assert.equal(stale.needsAttention, true);
   assert.match(stale.statusLine, /Stale relationship/);
   assert.deepEqual(stale.dataGaps, ["Revenue", "Employees"]);
+  assert.deepEqual(stale.attentionReasons, [
+    "Stale activity",
+    "Missing revenue",
+    "Missing employees",
+  ]);
+  assert.equal(stale.relationshipAction, "Schedule outreach and fill key account gaps.");
 });
 
 test("filterAccountsDirectoryCards supports starred, recent, and needs-attention quick filters", () => {
@@ -113,4 +124,46 @@ test("filterAccountsDirectoryCards supports starred, recent, and needs-attention
   assert.deepEqual(filterAccountsDirectoryCards(directory.cards, "starred").map((card) => card.id), ["older"]);
   assert.deepEqual(filterAccountsDirectoryCards(directory.cards, "recent").map((card) => card.id), ["recent"]);
   assert.deepEqual(filterAccountsDirectoryCards(directory.cards, "needs-attention").map((card) => card.id), ["stale"]);
+});
+
+test("normalizeAccountsQuickFilter reads supported URL filters", () => {
+  assert.equal(normalizeAccountsQuickFilter("needs-attention"), "needs-attention");
+  assert.equal(normalizeAccountsQuickFilter("recent"), "recent");
+  assert.equal(normalizeAccountsQuickFilter(["starred"]), "starred");
+  assert.equal(normalizeAccountsQuickFilter("unknown"), "all");
+  assert.equal(normalizeAccountsQuickFilter(undefined), "all");
+});
+
+test("normalizeAccountsDirectoryQuery makes URL state deterministic", () => {
+  assert.deepEqual(
+    normalizeAccountsDirectoryQuery({
+      filter: "needs-attention",
+      sortBy: "last-activity-desc",
+      search: "Halsted",
+      industry: "Hospitality",
+    }),
+    {
+      filter: "needs-attention",
+      sortBy: "last-activity-desc",
+      search: "Halsted",
+      industry: "Hospitality",
+    },
+  );
+
+  assert.deepEqual(
+    normalizeAccountsDirectoryQuery({
+      filter: "bad",
+      sortBy: "bad",
+      search: "   ",
+      industry: "",
+    }),
+    {
+      filter: "all",
+      sortBy: "name-asc",
+      search: "",
+      industry: "all",
+    },
+  );
+
+  assert.equal(normalizeAccountsDirectoryQuery({ search: ["Mendez", "Ignored"] }).search, "Mendez");
 });

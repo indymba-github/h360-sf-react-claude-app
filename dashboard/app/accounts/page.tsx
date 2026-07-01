@@ -2,20 +2,33 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { getEffectiveMcpMode } from "@/lib/mcp-config";
 import { queryAccounts, getAccountIndustries } from "@/lib/salesforce";
+import { normalizeAccountsDirectoryQuery } from "@/lib/accounts-directory";
 import ChatPanel from "@/components/ChatPanel";
 import PageHeading from "@/components/PageHeading";
 import AccountsListClient from "@/components/AccountsListClient";
 
-export default async function AccountsPage() {
+export default async function AccountsPage({
+  searchParams,
+}: {
+  searchParams?: {
+    filter?: string | string[];
+    industry?: string | string[];
+    search?: string | string[];
+    sortBy?: string | string[];
+  };
+}) {
   const session = await getSession();
   if (!session.accessToken || !session.instanceUrl) redirect("/");
 
   const effectiveMcpMode = getEffectiveMcpMode(session.mcpMode);
+  const initialQuery = normalizeAccountsDirectoryQuery(searchParams);
 
   const [initial, industries] = await Promise.all([
     queryAccounts(session.instanceUrl, session.accessToken, {
       pageSize: 200,
-      sortBy: "name-asc",
+      search: initialQuery.search,
+      industry: initialQuery.industry === "all" ? undefined : initialQuery.industry,
+      sortBy: initialQuery.sortBy,
     }).catch(() => ({ accounts: [], hasMore: false, totalCount: 0 })),
     getAccountIndustries(session.instanceUrl, session.accessToken),
   ]);
@@ -41,6 +54,10 @@ export default async function AccountsPage() {
             initialHasMore={initial.hasMore}
             initialTotalCount={initial.totalCount}
             industries={industries}
+            initialQuickFilter={initialQuery.filter}
+            initialSearch={initialQuery.search}
+            initialIndustry={initialQuery.industry}
+            initialSortBy={initialQuery.sortBy}
           />
 
         </div>

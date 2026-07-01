@@ -17,6 +17,10 @@ interface Props {
   initialHasMore: boolean;
   initialTotalCount: number;
   industries: string[];
+  initialQuickFilter?: AccountsQuickFilter;
+  initialSearch?: string;
+  initialIndustry?: string;
+  initialSortBy?: AccountSortBy;
 }
 
 function getStarred(): string[] {
@@ -64,6 +68,26 @@ function activityColor(tone: AccountActivityTone): string {
   return "var(--color-ink-soft)";
 }
 
+function replaceUrlState({
+  filter,
+  search,
+  industry,
+  sortBy,
+}: {
+  filter: AccountsQuickFilter;
+  search: string;
+  industry: string;
+  sortBy: AccountSortBy;
+}) {
+  const params = new URLSearchParams();
+  if (filter !== "all") params.set("filter", filter);
+  if (search.trim()) params.set("search", search.trim());
+  if (industry !== "all") params.set("industry", industry);
+  if (sortBy !== "name-asc") params.set("sortBy", sortBy);
+  const query = params.toString();
+  window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+}
+
 function SummaryMetric({ label, value, detail, tone = "neutral" }: { label: string; value: string; detail: string; tone?: "neutral" | "good" | "watch" }) {
   const color = tone === "good"
     ? "var(--color-success)"
@@ -99,6 +123,31 @@ function AccountFact({ label, value, tone }: { label: string; value: string; ton
   );
 }
 
+function AttentionReasons({ reasons }: { reasons: string[] }) {
+  if (reasons.length === 0) return null;
+
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 9 }}>
+      {reasons.slice(0, 4).map((reason) => (
+        <span
+          key={reason}
+          style={{
+            fontFamily: "var(--font-body)",
+            fontSize: "9px",
+            color: "var(--color-danger)",
+            background: "color-mix(in srgb, var(--color-danger) 7%, var(--color-surface))",
+            border: "0.5px solid color-mix(in srgb, var(--color-danger) 18%, var(--color-border))",
+            padding: "2px 5px",
+            lineHeight: 1.3,
+          }}
+        >
+          {reason}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function AccountCard({
   card,
   index,
@@ -111,13 +160,23 @@ function AccountCard({
   onToggleStar: (id: string) => void;
 }) {
   const statusColor = card.needsAttention ? "var(--color-danger)" : activityColor(card.activityTone);
+  const statusLabel = card.needsAttention
+    ? "Needs attention"
+    : card.activityTone === "recent"
+      ? "Recently touched"
+      : "Current";
 
   return (
     <div
       role="link"
       tabIndex={0}
       onClick={() => { window.location.href = `/accounts/${card.id}`; }}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") window.location.href = `/accounts/${card.id}`; }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          window.location.href = `/accounts/${card.id}`;
+        }
+      }}
       className="group relative block transition-opacity hover:opacity-80"
       style={{
         background: "var(--color-surface)",
@@ -126,13 +185,18 @@ function AccountCard({
           : "0.5px solid var(--color-border)",
         padding: "11px 13px",
         cursor: "pointer",
-        minHeight: 176,
+        minHeight: 204,
       }}
     >
       <div className="flex items-start justify-between mb-0.5">
-        <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--color-ink-soft)" }}>
-          {card.industryLabel}
-        </p>
+        <div style={{ minWidth: 0 }}>
+          <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--color-ink-soft)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {card.industryLabel}
+          </p>
+          <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.1em", textTransform: "uppercase", color: statusColor, marginTop: 4 }}>
+            {statusLabel}
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <span style={{ fontFamily: "var(--font-body)", fontSize: "9px", color: "var(--color-ink-soft)" }}>
             {String(index + 1).padStart(2, "0")}
@@ -154,6 +218,23 @@ function AccountCard({
 
       <div
         style={{
+          borderTop: "0.5px solid var(--color-border)",
+          borderBottom: "0.5px solid var(--color-border)",
+          padding: "8px 0",
+          marginBottom: 10,
+        }}
+      >
+        <p style={{ fontFamily: "var(--font-body)", fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-ink-soft)", marginBottom: 4 }}>
+          Next move
+        </p>
+        <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-muted)", lineHeight: 1.4 }}>
+          {card.relationshipAction}
+        </p>
+        <AttentionReasons reasons={card.attentionReasons} />
+      </div>
+
+      <div
+        style={{
           display: "grid",
           gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
           gap: "9px 14px",
@@ -171,9 +252,7 @@ function AccountCard({
           fontSize: "10px",
           lineHeight: 1.45,
           color: statusColor,
-          marginTop: 12,
-          paddingTop: 9,
-          borderTop: "0.5px solid var(--color-border)",
+          marginTop: 10,
         }}
       >
         {card.statusLine}
@@ -188,26 +267,31 @@ export default function AccountsListClient({
   initialHasMore,
   initialTotalCount,
   industries,
+  initialQuickFilter = "all",
+  initialSearch = "",
+  initialIndustry = "all",
+  initialSortBy = "name-asc",
 }: Props) {
   const [accounts, setAccounts] = useState<SFAccount[]>(initialAccounts);
   const [hasMore, setHasMore] = useState(initialHasMore);
   const [totalCount, setTotalCount] = useState(initialTotalCount);
-  const [search, setSearch] = useState("");
-  const [industry, setIndustry] = useState("all");
-  const [sortBy, setSortBy] = useState<AccountSortBy>("name-asc");
-  const [quickFilter, setQuickFilter] = useState<AccountsQuickFilter>("all");
+  const [search, setSearch] = useState(initialSearch);
+  const [industry, setIndustry] = useState(initialIndustry);
+  const [sortBy, setSortBy] = useState<AccountSortBy>(initialSortBy);
+  const [quickFilter, setQuickFilter] = useState<AccountsQuickFilter>(initialQuickFilter);
   const [isPending, setIsPending] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
-  const [starred, setStarred] = useState<string[]>(() => {
-    if (typeof window === "undefined") return [];
-    return getStarred();
-  });
+  const [starred, setStarred] = useState<string[]>([]);
 
   // Track in-flight filter requests so a slower earlier request can't overwrite a newer one
   const filterSeqRef = useRef(0);
   // Track load-more abort controller
   const loadMoreAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    setStarred(getStarred());
+  }, []);
 
   function toggleStar(id: string) {
     setStarred((prev) => {
@@ -215,6 +299,26 @@ export default function AccountsListClient({
       try { localStorage.setItem("accounts.starred", JSON.stringify(next)); } catch {}
       return next;
     });
+  }
+
+  function selectQuickFilter(filter: AccountsQuickFilter) {
+    setQuickFilter(filter);
+    replaceUrlState({ filter, search, industry, sortBy });
+  }
+
+  function updateSearch(value: string) {
+    setSearch(value);
+    replaceUrlState({ filter: quickFilter, search: value, industry, sortBy });
+  }
+
+  function selectIndustry(value: string) {
+    setIndustry(value);
+    replaceUrlState({ filter: quickFilter, search, industry: value, sortBy });
+  }
+
+  function selectSortBy(value: AccountSortBy) {
+    setSortBy(value);
+    replaceUrlState({ filter: quickFilter, search, industry, sortBy: value });
   }
 
   // Re-query when search/industry/sort changes (debounced 300ms)
@@ -301,6 +405,9 @@ export default function AccountsListClient({
     recent: directory.summary.recentlyTouchedCount,
     "needs-attention": directory.summary.needsAttentionCount,
   };
+  const industryOptions = industry !== "all" && !industries.includes(industry)
+    ? [industry, ...industries]
+    : industries;
 
   const selectStyle: React.CSSProperties = {
     background: "var(--color-surface)",
@@ -337,7 +444,7 @@ export default function AccountsListClient({
         <SummaryMetric
           label="Needs attention"
           value={directory.summary.needsAttentionCount.toLocaleString()}
-          detail="Stale activity or multiple data gaps."
+          detail="Stale activity, no activity, or context gaps."
           tone={directory.summary.needsAttentionCount > 0 ? "watch" : "neutral"}
         />
         <SummaryMetric
@@ -360,7 +467,7 @@ export default function AccountsListClient({
         <input
           type="text"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => updateSearch(e.target.value)}
           placeholder="Search accounts, industries, regions…"
           className="w-full pl-8 pr-8 py-2 focus:outline-none"
           style={{
@@ -390,18 +497,18 @@ export default function AccountsListClient({
       <div className="flex items-center gap-2 mb-3" style={{ flexWrap: "wrap" }}>
         <select
           value={industry}
-          onChange={(e) => setIndustry(e.target.value)}
+          onChange={(e) => selectIndustry(e.target.value)}
           style={{ ...selectStyle, color: industry === "all" ? "var(--color-ink-soft)" : "var(--color-ink)", minWidth: 140 }}
         >
           <option value="all">All industries</option>
-          {industries.map((i) => (
+          {industryOptions.map((i) => (
             <option key={i} value={i}>{i}</option>
           ))}
         </select>
 
         <select
           value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as AccountSortBy)}
+          onChange={(e) => selectSortBy(e.target.value as AccountSortBy)}
           style={{ ...selectStyle, color: "var(--color-ink)", minWidth: 180 }}
         >
           {(Object.keys(SORT_LABELS) as AccountSortBy[]).map((s) => (
@@ -425,7 +532,7 @@ export default function AccountsListClient({
             <button
               key={filter.id}
               type="button"
-              onClick={() => setQuickFilter(filter.id)}
+              onClick={() => selectQuickFilter(filter.id)}
               aria-pressed={active}
               style={{
                 padding: "4px 8px",
@@ -458,7 +565,13 @@ export default function AccountsListClient({
           </p>
           {(search || industry !== "all" || quickFilter !== "all") && (
             <button
-              onClick={() => { setSearch(""); setIndustry("all"); setQuickFilter("all"); }}
+              onClick={() => {
+                setSearch("");
+                setIndustry("all");
+                setSortBy("name-asc");
+                setQuickFilter("all");
+                replaceUrlState({ filter: "all", search: "", industry: "all", sortBy: "name-asc" });
+              }}
               style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-accent-text)", background: "none", border: "0.5px solid var(--color-border)", padding: "4px 12px", cursor: "pointer", marginTop: 4 }}
             >
               Clear filters
@@ -499,7 +612,7 @@ export default function AccountsListClient({
             <p style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--color-ink-soft)", textAlign: "center" }}>
               Salesforce limits offset-based pagination to 2,000 records.{" "}
               <button
-                onClick={() => setSortBy("name-asc")}
+                onClick={() => selectSortBy("name-asc")}
                 style={{ color: "var(--color-accent-text)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", fontFamily: "inherit", fontSize: "inherit" }}
               >
                 Switch to Name sort
